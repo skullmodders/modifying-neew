@@ -9,7 +9,7 @@ import json
 import re
 import html
 import functools
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import csv
 import io
@@ -84,6 +84,36 @@ DEFAULT_SETTINGS = {
     "inactivity_min_balance_floor": 1,
     "inactivity_definition": "no_referral_or_bonus_claim",
     "game_daily_bonus_cooldown_hours": 24,
+    "mine_game_enabled": True,
+    "mine_global_win_rate": 45,
+    "mine_force_win_all": False,
+    "mine_force_loss_all": False,
+    "mine_force_win_users": [],
+    "mine_force_loss_users": [],
+    "mine_base_multiplier": 1.12,
+    "mine_progressive_multiplier_rate": 0.24,
+    "mine_max_multiplier_cap": 25.0,
+    "mine_jackpot_multiplier": 50.0,
+    "mine_min_bet": 1.0,
+    "mine_max_bet": 500.0,
+    "mine_grid_size": 5,
+    "mine_min_mines": 1,
+    "mine_max_mines": 24,
+    "mine_daily_play_limit": 100,
+    "mine_hourly_play_limit": 30,
+    "mine_cooldown_seconds": 3,
+    "mine_winning_tax_percent": 0.0,
+    "mine_gst_on_winnings": 0.0,
+    "mine_max_win_amount_per_session": 10000.0,
+    "mine_daily_win_cap_per_user": 25000.0,
+    "mine_house_edge_percent": 5.0,
+    "mine_consecutive_win_limit": 0,
+    "mine_consecutive_loss_limit": 0,
+    "mine_blacklist_users": [],
+    "mine_sound_effects_enabled": True,
+    "mine_risk_indicator_enabled": True,
+    "mine_auto_cash_out_enabled": False,
+    "mine_force_safe_first_tile": True,
 }
 
 PE = {
@@ -278,7 +308,10 @@ def init_db():
             welcome_bonus_paid INTEGER DEFAULT 0,
             bonus_balance REAL DEFAULT 0,
             last_active_at TEXT DEFAULT '',
-            total_referral_earnings REAL DEFAULT 0
+            total_referral_earnings REAL DEFAULT 0,
+            referral_balance REAL DEFAULT 0,
+            daily_bonus_balance REAL DEFAULT 0,
+            gift_balance REAL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS withdrawals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -395,6 +428,52 @@ def init_db():
             assigned_at TEXT DEFAULT '',
             note TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS mine_game_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            chat_id INTEGER DEFAULT 0,
+            source_balance TEXT DEFAULT 'main',
+            bet_amount REAL DEFAULT 0,
+            mines_count INTEGER DEFAULT 3,
+            grid_size INTEGER DEFAULT 5,
+            board_json TEXT DEFAULT '[]',
+            revealed_json TEXT DEFAULT '[]',
+            gems_found INTEGER DEFAULT 0,
+            safe_target INTEGER DEFAULT 0,
+            current_multiplier REAL DEFAULT 1.0,
+            payout_amount REAL DEFAULT 0,
+            status TEXT DEFAULT 'active',
+            outcome_mode TEXT DEFAULT 'normal',
+            first_pick_safe INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT '',
+            updated_at TEXT DEFAULT '',
+            finished_at TEXT DEFAULT '',
+            client_seed TEXT DEFAULT '',
+            server_seed TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS mine_game_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER,
+            user_id INTEGER NOT NULL,
+            source_balance TEXT DEFAULT 'main',
+            bet_amount REAL DEFAULT 0,
+            mines_count INTEGER DEFAULT 3,
+            grid_size INTEGER DEFAULT 5,
+            gems_found INTEGER DEFAULT 0,
+            multiplier REAL DEFAULT 1.0,
+            gross_payout REAL DEFAULT 0,
+            tax_amount REAL DEFAULT 0,
+            gst_amount REAL DEFAULT 0,
+            net_payout REAL DEFAULT 0,
+            result TEXT DEFAULT 'loss',
+            status TEXT DEFAULT 'closed',
+            board_json TEXT DEFAULT '[]',
+            revealed_json TEXT DEFAULT '[]',
+            created_at TEXT DEFAULT '',
+            finished_at TEXT DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_mine_sessions_user_status ON mine_game_sessions(user_id, status);
+        CREATE INDEX IF NOT EXISTS idx_mine_history_user_created ON mine_game_history(user_id, created_at);
     """)
 
     try:
@@ -425,6 +504,18 @@ def init_db():
         pass
     try:
         c.execute("ALTER TABLE users ADD COLUMN total_referral_earnings REAL DEFAULT 0")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN referral_balance REAL DEFAULT 0")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN daily_bonus_balance REAL DEFAULT 0")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN gift_balance REAL DEFAULT 0")
     except:
         pass
     try:
@@ -764,9 +855,9 @@ def create_user(user_id, username, first_name, referred_by=0):
 
     db_execute(
         "INSERT OR IGNORE INTO users "
-        "(user_id, username, first_name, balance, total_earned, referred_by, joined_at, referral_paid, ip_address, ip_verified, welcome_bonus_paid, bonus_balance, last_active_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (user_id, username or "", first_name or "User", 0.0, 0.0, referred_by, now, 0, "", 0, 0, 0.0, now)
+        "(user_id, username, first_name, balance, total_earned, referred_by, joined_at, referral_paid, ip_address, ip_verified, welcome_bonus_paid, bonus_balance, last_active_at, referral_balance, daily_bonus_balance, gift_balance) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (user_id, username or "", first_name or "User", 0.0, 0.0, referred_by, now, 0, "", 0, 0, 0.0, now, 0.0, 0.0, 0.0)
     )
 
     if referred_by and referred_by != user_id:
@@ -891,8 +982,8 @@ def process_referral_bonus(user_id):
         if reward <= 0:
             continue
         db_execute(
-            "UPDATE users SET balance=balance+?, total_earned=total_earned+?, total_referral_earnings=COALESCE(total_referral_earnings,0)+?, referral_count=referral_count+? WHERE user_id=?",
-            (reward, reward, reward, 1 if level == 1 else 0, parent["user_id"])
+            "UPDATE users SET balance=balance+?, total_earned=total_earned+?, total_referral_earnings=COALESCE(total_referral_earnings,0)+?, referral_balance=COALESCE(referral_balance,0)+?, referral_count=referral_count+? WHERE user_id=?",
+            (reward, reward, reward, reward, 1 if level == 1 else 0, parent["user_id"])
         )
         try:
             safe_send(
@@ -955,6 +1046,198 @@ def get_withdrawal_tax_breakdown(user, amount):
         "total_tax": total_tax,
         "total_debit": round(amount + total_tax, 2),
     }
+
+def safe_float(value, default=0.0):
+    try:
+        return float(value or 0)
+    except Exception:
+        return float(default)
+
+
+def safe_int(value, default=0):
+    try:
+        return int(value or 0)
+    except Exception:
+        return int(default)
+
+
+def safe_json(value, default):
+    if isinstance(value, (dict, list, bool, int, float)):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return default
+
+
+def get_wallet_breakdown(user):
+    if not user:
+        return {"main": 0.0, "referral": 0.0, "daily_bonus": 0.0, "gift": 0.0}
+    keys = user.keys() if hasattr(user, "keys") else []
+    return {
+        "main": safe_float(user["balance"] if "balance" in keys else user.get("balance", 0)),
+        "referral": safe_float(user["referral_balance"] if "referral_balance" in keys else user.get("referral_balance", 0)),
+        "daily_bonus": safe_float(user["daily_bonus_balance"] if "daily_bonus_balance" in keys else user.get("daily_bonus_balance", 0)),
+        "gift": safe_float(user["gift_balance"] if "gift_balance" in keys else user.get("gift_balance", 0)),
+    }
+
+
+def get_available_game_balance(user_id, source):
+    user = get_user(user_id)
+    if not user:
+        return 0.0
+    source = str(source or "main")
+    if source == "main":
+        return safe_float(user["balance"])
+    if source == "referral":
+        return safe_float(user["referral_balance"])
+    if source == "daily_bonus":
+        return safe_float(user["daily_bonus_balance"])
+    if source == "gift":
+        return safe_float(user["gift_balance"])
+    return 0.0
+
+
+def debit_game_balance(user_id, amount, source):
+    amount = round(safe_float(amount), 2)
+    source = str(source or "main")
+    user = get_user(user_id)
+    if not user or amount <= 0:
+        return False, "Invalid user or amount."
+    balance = safe_float(user["balance"])
+    if source == "main":
+        if balance < amount:
+            return False, "Insufficient balance."
+        update_user(user_id, balance=round(balance - amount, 2))
+        return True, "ok"
+    col_map = {"referral": "referral_balance", "daily_bonus": "daily_bonus_balance", "gift": "gift_balance"}
+    col = col_map.get(source)
+    if not col:
+        return False, "Invalid balance source."
+    src_balance = safe_float(user[col])
+    if src_balance < amount or balance < amount:
+        return False, "Insufficient balance."
+    update_user(user_id, **{col: round(src_balance - amount, 2), "balance": round(balance - amount, 2)})
+    return True, "ok"
+
+
+def credit_game_winnings(user_id, net_amount, gross_profit=0.0):
+    user = get_user(user_id)
+    if not user:
+        return False
+    update_user(
+        user_id,
+        balance=round(safe_float(user["balance"]) + safe_float(net_amount), 2),
+        total_earned=round(safe_float(user["total_earned"]) + max(0.0, safe_float(gross_profit)), 2),
+    )
+    return True
+
+
+def get_public_mine_url():
+    base_url = normalize_public_base_url(os.environ.get("PUBLIC_BASE_URL", "") or PUBLIC_BASE_URL)
+    if not base_url:
+        return ""
+    return f"{base_url}/games/mine"
+
+
+def get_consecutive_mine_stats(user_id, limit=20):
+    rows = db_execute(
+        "SELECT result FROM mine_game_history WHERE user_id=? ORDER BY id DESC LIMIT ?",
+        (user_id, limit), fetch=True
+    ) or []
+    wins = 0
+    losses = 0
+    for row in rows:
+        result = str(row["result"]).lower()
+        if result == "cashout":
+            wins += 1
+        else:
+            break
+    for row in rows:
+        result = str(row["result"]).lower()
+        if result == "loss":
+            losses += 1
+        else:
+            break
+    return {"wins": wins, "losses": losses}
+
+
+def get_mine_outcome_mode(user_id):
+    force_win_users = {safe_int(x) for x in safe_json(get_setting("mine_force_win_users"), [])}
+    force_loss_users = {safe_int(x) for x in safe_json(get_setting("mine_force_loss_users"), [])}
+    if bool(get_setting("mine_force_loss_all")) or safe_int(user_id) in force_loss_users:
+        return "force_loss"
+    if bool(get_setting("mine_force_win_all")) or safe_int(user_id) in force_win_users:
+        return "force_win"
+    streak = get_consecutive_mine_stats(user_id)
+    loss_limit = safe_int(get_setting("mine_consecutive_loss_limit"))
+    win_limit = safe_int(get_setting("mine_consecutive_win_limit"))
+    if loss_limit > 0 and streak["losses"] >= loss_limit:
+        return "force_win"
+    if win_limit > 0 and streak["wins"] >= win_limit:
+        return "force_loss"
+    return "normal"
+
+
+def get_mine_multiplier(gems_found, mines_count, grid_size=None):
+    grid_size = safe_int(grid_size or get_setting("mine_grid_size") or 5, 5)
+    total_tiles = max(4, grid_size * grid_size)
+    safe_tiles = max(1, total_tiles - safe_int(mines_count, 3))
+    base = max(1.0, safe_float(get_setting("mine_base_multiplier"), 1.12))
+    progressive = max(0.0, safe_float(get_setting("mine_progressive_multiplier_rate"), 0.24))
+    cap = max(1.0, safe_float(get_setting("mine_max_multiplier_cap"), 25.0))
+    jackpot = max(cap, safe_float(get_setting("mine_jackpot_multiplier"), 50.0))
+    edge = max(0.0, min(100.0, safe_float(get_setting("mine_house_edge_percent"), 5.0)))
+    density = 1.0 + (safe_int(mines_count, 3) / max(1.0, safe_tiles))
+    multiplier = base * ((1.0 + progressive) ** max(0, safe_int(gems_found, 0))) * density
+    multiplier *= max(0.01, (100.0 - edge) / 100.0)
+    if safe_int(gems_found, 0) >= safe_tiles:
+        multiplier = max(multiplier, jackpot)
+    return round(min(multiplier, jackpot if safe_int(gems_found, 0) >= safe_tiles else cap), 2)
+
+
+def can_user_play_mine(user_id):
+    if not bool(get_setting("mine_game_enabled")):
+        return False, "Mine Game is disabled right now."
+    blacklist = {safe_int(x) for x in safe_json(get_setting("mine_blacklist_users"), [])}
+    if safe_int(user_id) in blacklist:
+        return False, "You are blocked from playing Mine Game."
+    cooldown = safe_int(get_setting("mine_cooldown_seconds"), 0)
+    if cooldown > 0:
+        last_row = db_execute(
+            "SELECT created_at FROM mine_game_history WHERE user_id=? ORDER BY id DESC LIMIT 1",
+            (user_id,), fetchone=True
+        )
+        if last_row:
+            last_dt = parse_dt(last_row["created_at"])
+            if last_dt and (datetime.now() - last_dt).total_seconds() < cooldown:
+                wait = cooldown - int((datetime.now() - last_dt).total_seconds())
+                return False, f"Cooldown active. Wait {max(1, wait)}s."
+    day_limit = safe_int(get_setting("mine_daily_play_limit"), 0)
+    if day_limit > 0:
+        row = db_execute(
+            "SELECT COUNT(*) AS c FROM mine_game_history WHERE user_id=? AND substr(created_at,1,10)=?",
+            (user_id, datetime.now().strftime("%Y-%m-%d")), fetchone=True
+        )
+        if row and safe_int(row["c"]) >= day_limit:
+            return False, "Daily Mine Game limit reached."
+    hour_limit = safe_int(get_setting("mine_hourly_play_limit"), 0)
+    if hour_limit > 0:
+        since = (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        row = db_execute(
+            "SELECT COUNT(*) AS c FROM mine_game_history WHERE user_id=? AND created_at>=?",
+            (user_id, since), fetchone=True
+        )
+        if row and safe_int(row["c"]) >= hour_limit:
+            return False, "Hourly Mine Game limit reached."
+    active = db_execute(
+        "SELECT id FROM mine_game_sessions WHERE user_id=? AND status='active' LIMIT 1",
+        (user_id,), fetchone=True
+    )
+    if active:
+        return False, "You already have an active Mine Game session."
+    return True, "ok"
+
 
 def generate_code(length=8):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
@@ -1135,6 +1418,7 @@ def get_main_keyboard(user_id=None):
     )
     markup.add(
         types.KeyboardButton("📋 Tasks"),
+        types.KeyboardButton("🎮 Games"),
     )
     if user_id and is_admin(user_id):
         markup.add(types.KeyboardButton("👑 Admin Panel"))
@@ -1159,6 +1443,7 @@ def get_admin_keyboard():
     )
     markup.add(
         types.KeyboardButton("🎟 Redeem Codes"),
+        types.KeyboardButton("🎮 Game Control"),
     )
     markup.add(
         types.KeyboardButton("📋 Task Manager"),

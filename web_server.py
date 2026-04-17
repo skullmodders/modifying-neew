@@ -1,5 +1,8 @@
 import os
 import logging
+import sqlite3
+import json
+from flask import render_template
 from anticheat import create_verification_app
 
 # ================== CONFIG ==================
@@ -27,6 +30,46 @@ app = create_verification_app(
 )
 
 # ================== EXTRA ROUTES ==================
+
+
+
+@app.route("/games/mine")
+def mine_ui():
+    def setting(key, default=None):
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=30)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+            conn.close()
+            if not row:
+                return default
+            try:
+                return json.loads(row["value"])
+            except Exception:
+                return row["value"]
+        except Exception:
+            return default
+
+    grid_size = int(setting("mine_grid_size", 5) or 5)
+    mines_min = int(setting("mine_min_mines", 1) or 1)
+    mines_max = int(setting("mine_max_mines", max(1, grid_size * grid_size - 1)) or max(1, grid_size * grid_size - 1))
+    return render_template(
+        "mine.html",
+        grid_size=grid_size,
+        tiles=grid_size * grid_size,
+        mines_min=mines_min,
+        mines_max=mines_max,
+        min_bet=setting("mine_min_bet", 1),
+        max_bet=setting("mine_max_bet", 500),
+        base_multiplier=setting("mine_base_multiplier", 1.12),
+        progressive_rate=setting("mine_progressive_multiplier_rate", 0.24),
+        max_cap=setting("mine_max_multiplier_cap", 25),
+        jackpot=setting("mine_jackpot_multiplier", 50),
+        enabled=bool(setting("mine_game_enabled", True)),
+        sound_enabled=bool(setting("mine_sound_effects_enabled", True)),
+        risk_enabled=bool(setting("mine_risk_indicator_enabled", True)),
+        auto_cashout=bool(setting("mine_auto_cash_out_enabled", False)),
+    )
 
 @app.route("/debug")
 def debug_info():

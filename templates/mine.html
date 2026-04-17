@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mine Game UI</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card: #111827;
+            --muted: #94a3b8;
+            --accent: #22c55e;
+            --danger: #ef4444;
+            --tile: #1f2937;
+            --tile-border: #334155;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background: linear-gradient(180deg, #020617 0%, #0f172a 100%);
+            color: #fff;
+            font-family: Arial, sans-serif;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .wrap {
+            max-width: 980px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 340px 1fr;
+            gap: 20px;
+        }
+        .card {
+            background: rgba(17,24,39,.95);
+            border: 1px solid #1e293b;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 18px 40px rgba(0,0,0,.35);
+        }
+        h1, h2, p { margin-top: 0; }
+        .muted { color: var(--muted); }
+        .badge {
+            display: inline-block;
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            background: {% if enabled %}rgba(34,197,94,.15){% else %}rgba(239,68,68,.15){% endif %};
+            color: {% if enabled %}#86efac{% else %}#fca5a5{% endif %};
+        }
+        .panel-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin: 16px 0;
+        }
+        .stat {
+            background: #0b1220;
+            border: 1px solid #1e293b;
+            border-radius: 14px;
+            padding: 12px;
+        }
+        label {
+            display: block;
+            margin: 10px 0 6px;
+            font-size: 14px;
+            color: #cbd5e1;
+        }
+        input, select, button {
+            width: 100%;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            background: #0b1220;
+            color: #fff;
+            padding: 12px 14px;
+            font-size: 14px;
+        }
+        button {
+            background: linear-gradient(180deg, #22c55e, #16a34a);
+            border: none;
+            font-weight: 700;
+            cursor: pointer;
+            margin-top: 14px;
+        }
+        .danger { background: linear-gradient(180deg, #ef4444, #dc2626); }
+        .board {
+            display: grid;
+            grid-template-columns: repeat({{ grid_size }}, minmax(44px, 1fr));
+            gap: 10px;
+            margin-top: 18px;
+        }
+        .tile {
+            aspect-ratio: 1/1;
+            display: grid;
+            place-items: center;
+            border-radius: 14px;
+            background: var(--tile);
+            border: 1px solid var(--tile-border);
+            font-size: 20px;
+            font-weight: 700;
+        }
+        .gem { background: rgba(34,197,94,.18); }
+        .mine { background: rgba(239,68,68,.18); }
+        .footer-note {
+            margin-top: 18px;
+            font-size: 13px;
+            color: #94a3b8;
+            line-height: 1.5;
+        }
+        @media (max-width: 860px) {
+            .wrap { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="card">
+            <div class="badge">{% if enabled %}Mine Game Enabled{% else %}Mine Game Disabled{% endif %}</div>
+            <h1>💣 Mine Game UI</h1>
+            <p class="muted">This template is intentionally easy to edit later. The live game logic runs in your Telegram bot, and this page mirrors the current Mine Game configuration.</p>
+
+            <label>Bet amount</label>
+            <input type="number" min="{{ min_bet }}" max="{{ max_bet }}" value="{{ min_bet }}" />
+
+            <label>Mine count</label>
+            <select>
+                {% for i in range(mines_min, mines_max + 1) %}
+                <option value="{{ i }}">{{ i }} mine{% if i != 1 %}s{% endif %}</option>
+                {% endfor %}
+            </select>
+
+            <label>Balance source</label>
+            <select>
+                <option>Main Balance</option>
+                <option>Referral Balance</option>
+                <option>Daily Bonus Balance</option>
+                <option>Gift Code Balance</option>
+            </select>
+
+            <button>Start Mine Game</button>
+            <button class="danger">Cash Out</button>
+
+            <div class="footer-note">
+                Current controls:<br>
+                Sound: <b>{{ 'ON' if sound_enabled else 'OFF' }}</b><br>
+                Risk indicator: <b>{{ 'ON' if risk_enabled else 'OFF' }}</b><br>
+                Auto cash out: <b>{{ 'ON' if auto_cashout else 'OFF' }}</b>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Grid Preview ({{ grid_size }}×{{ grid_size }})</h2>
+            <div class="panel-grid">
+                <div class="stat"><div class="muted">Tiles</div><div><b>{{ tiles }}</b></div></div>
+                <div class="stat"><div class="muted">Mine Range</div><div><b>{{ mines_min }} - {{ mines_max }}</b></div></div>
+                <div class="stat"><div class="muted">Bet Range</div><div><b>₹{{ min_bet }} - ₹{{ max_bet }}</b></div></div>
+                <div class="stat"><div class="muted">Base Multiplier</div><div><b>x{{ base_multiplier }}</b></div></div>
+                <div class="stat"><div class="muted">Progressive Rate</div><div><b>{{ progressive_rate }}</b></div></div>
+                <div class="stat"><div class="muted">Max / Jackpot</div><div><b>x{{ max_cap }} / x{{ jackpot }}</b></div></div>
+            </div>
+
+            <div class="board">
+                {% for i in range(tiles) %}
+                    <div class="tile">?</div>
+                {% endfor %}
+            </div>
+
+            <p class="footer-note">
+                You can restyle this page, swap the controls, or connect it to a richer frontend later without changing the Telegram-side wallet and admin logic.
+            </p>
+        </div>
+    </div>
+</body>
+</html>
