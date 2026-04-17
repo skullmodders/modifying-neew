@@ -6,48 +6,50 @@
     <title>Mine Game UI</title>
     <style>
         :root {
-            --bg: #0f172a;
-            --card: #111827;
-            --muted: #94a3b8;
+            --bg: #0b1020;
+            --card: #121a2c;
+            --card-2: #0f1728;
+            --muted: #96a3ba;
             --accent: #22c55e;
             --danger: #ef4444;
-            --tile: #1f2937;
-            --tile-border: #334155;
+            --tile: #1c2740;
+            --tile-border: #2f3d5e;
         }
         * { box-sizing: border-box; }
         body {
             margin: 0;
-            background: linear-gradient(180deg, #020617 0%, #0f172a 100%);
+            background: radial-gradient(circle at top, #14213d 0%, #0b1020 55%, #060913 100%);
             color: #fff;
             font-family: Arial, sans-serif;
             min-height: 100vh;
-            padding: 20px;
+            padding: 18px;
         }
         .wrap {
-            max-width: 980px;
+            max-width: 1180px;
             margin: 0 auto;
             display: grid;
-            grid-template-columns: 340px 1fr;
-            gap: 20px;
+            grid-template-columns: 360px 1fr;
+            gap: 18px;
         }
         .card {
-            background: rgba(17,24,39,.95);
-            border: 1px solid #1e293b;
-            border-radius: 20px;
+            background: rgba(18,26,44,.96);
+            border: 1px solid #1f2a44;
+            border-radius: 22px;
             padding: 20px;
-            box-shadow: 0 18px 40px rgba(0,0,0,.35);
+            box-shadow: 0 16px 38px rgba(0,0,0,.35);
         }
         h1, h2, p { margin-top: 0; }
         .muted { color: var(--muted); }
         .badge {
             display: inline-block;
-            padding: 6px 10px;
+            padding: 7px 11px;
             border-radius: 999px;
             font-size: 12px;
             font-weight: 700;
-            background: {% if enabled %}rgba(34,197,94,.15){% else %}rgba(239,68,68,.15){% endif %};
-            color: {% if enabled %}#86efac{% else %}#fca5a5{% endif %};
+            margin-right: 8px;
         }
+        .ok { background: rgba(34,197,94,.14); color: #86efac; }
+        .off { background: rgba(239,68,68,.14); color: #fca5a5; }
         .panel-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
@@ -55,7 +57,7 @@
             margin: 16px 0;
         }
         .stat {
-            background: #0b1220;
+            background: var(--card-2);
             border: 1px solid #1e293b;
             border-radius: 14px;
             padding: 12px;
@@ -82,10 +84,13 @@
             cursor: pointer;
             margin-top: 14px;
         }
+        button.secondary {
+            background: linear-gradient(180deg, #475569, #334155);
+        }
         .danger { background: linear-gradient(180deg, #ef4444, #dc2626); }
         .board {
             display: grid;
-            grid-template-columns: repeat({{ grid_size }}, minmax(44px, 1fr));
+            grid-template-columns: repeat({{ grid_size }}, minmax(46px, 1fr));
             gap: 10px;
             margin-top: 18px;
         }
@@ -96,18 +101,30 @@
             border-radius: 14px;
             background: var(--tile);
             border: 1px solid var(--tile-border);
-            font-size: 20px;
+            font-size: 22px;
             font-weight: 700;
+            cursor: pointer;
+            user-select: none;
+            transition: transform .12s ease, background .16s ease;
         }
-        .gem { background: rgba(34,197,94,.18); }
-        .mine { background: rgba(239,68,68,.18); }
+        .tile:hover { transform: translateY(-1px); }
+        .tile.revealed.gem { background: rgba(34,197,94,.18); }
+        .tile.revealed.mine { background: rgba(239,68,68,.18); }
+        .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
         .footer-note {
             margin-top: 18px;
             font-size: 13px;
             color: #94a3b8;
-            line-height: 1.5;
+            line-height: 1.6;
         }
-        @media (max-width: 860px) {
+        code {
+            background: #0b1220;
+            border: 1px solid #23304a;
+            padding: 5px 8px;
+            border-radius: 9px;
+            word-break: break-all;
+        }
+        @media (max-width: 900px) {
             .wrap { grid-template-columns: 1fr; }
         }
     </style>
@@ -115,36 +132,49 @@
 <body>
     <div class="wrap">
         <div class="card">
-            <div class="badge">{% if enabled %}Mine Game Enabled{% else %}Mine Game Disabled{% endif %}</div>
+            <div class="row">
+                <div class="badge {{ 'ok' if enabled else 'off' }}">Game {{ 'Enabled' if enabled else 'Disabled' }}</div>
+                <div class="badge {{ 'ok' if telegram_enabled else 'off' }}">Telegram {{ 'ON' if telegram_enabled else 'OFF' }}</div>
+                <div class="badge {{ 'ok' if web_enabled else 'off' }}">Web {{ 'ON' if web_enabled else 'OFF' }}</div>
+            </div>
             <h1>💣 Mine Game UI</h1>
-            <p class="muted">This template is intentionally easy to edit later. The live game logic runs in your Telegram bot, and this page mirrors the current Mine Game configuration.</p>
+            <p class="muted">This page is now safer for Railway deployment. It works on <code>/mine</code>, <code>/mine-game</code>, and <code>/games/mine</code> so route mismatch issues are much less likely.</p>
 
             <label>Bet amount</label>
-            <input type="number" min="{{ min_bet }}" max="{{ max_bet }}" value="{{ min_bet }}" />
+            <input id="bet" type="number" min="{{ min_bet }}" max="{{ max_bet }}" value="{{ min_bet }}" />
 
             <label>Mine count</label>
-            <select>
+            <select id="mineCount">
                 {% for i in range(mines_min, mines_max + 1) %}
                 <option value="{{ i }}">{{ i }} mine{% if i != 1 %}s{% endif %}</option>
                 {% endfor %}
             </select>
 
             <label>Balance source</label>
-            <select>
+            <select id="balanceSource">
                 <option>Main Balance</option>
                 <option>Referral Balance</option>
                 <option>Daily Bonus Balance</option>
                 <option>Gift Code Balance</option>
             </select>
 
-            <button>Start Mine Game</button>
-            <button class="danger">Cash Out</button>
+            <div class="panel-grid">
+                <div class="stat"><div class="muted">Current Multiplier</div><div><b id="multiplier">x1.00</b></div></div>
+                <div class="stat"><div class="muted">Potential Cash Out</div><div><b id="cashout">₹0.00</b></div></div>
+                <div class="stat"><div class="muted">Risk Indicator</div><div><b>{{ 'ON' if risk_enabled else 'OFF' }}</b></div></div>
+                <div class="stat"><div class="muted">Safe First Tile</div><div><b>{{ 'ON' if safe_first_tile else 'OFF' }}</b></div></div>
+            </div>
+
+            <button id="startBtn">Preview Start</button>
+            <button class="secondary" id="resetBtn">Reset Preview</button>
+            <button class="danger" id="cashBtn">Preview Cash Out</button>
 
             <div class="footer-note">
-                Current controls:<br>
+                Current route: <code>{{ route_path }}</code><br>
                 Sound: <b>{{ 'ON' if sound_enabled else 'OFF' }}</b><br>
                 Risk indicator: <b>{{ 'ON' if risk_enabled else 'OFF' }}</b><br>
-                Auto cash out: <b>{{ 'ON' if auto_cashout else 'OFF' }}</b>
+                Auto cash out: <b>{{ 'ON' if auto_cashout else 'OFF' }}</b><br>
+                Open bot: <code>@{{ bot_username }}</code>
             </div>
         </div>
 
@@ -159,16 +189,69 @@
                 <div class="stat"><div class="muted">Max / Jackpot</div><div><b>x{{ max_cap }} / x{{ jackpot }}</b></div></div>
             </div>
 
-            <div class="board">
+            <div class="board" id="board">
                 {% for i in range(tiles) %}
-                    <div class="tile">?</div>
+                    <div class="tile" data-i="{{ i }}">?</div>
                 {% endfor %}
             </div>
 
             <p class="footer-note">
-                You can restyle this page, swap the controls, or connect it to a richer frontend later without changing the Telegram-side wallet and admin logic.
+                This is a frontend preview layer. Telegram remains the source of truth for balance, game session state, admin controls, and payouts.
             </p>
         </div>
     </div>
+
+    <script>
+        const board = document.getElementById('board');
+        const tiles = [...document.querySelectorAll('.tile')];
+        const betInput = document.getElementById('bet');
+        const mineCount = document.getElementById('mineCount');
+        const multiplierEl = document.getElementById('multiplier');
+        const cashoutEl = document.getElementById('cashout');
+        let revealed = 0;
+        let finished = false;
+
+        function updatePreview() {
+            const bet = parseFloat(betInput.value || 0);
+            const mines = parseInt(mineCount.value || {{ mines_min }}, 10);
+            const density = 1 + (mines / Math.max(1, {{ tiles }} - mines));
+            const mult = Math.min({{ max_cap }}, ({{ base_multiplier }} * Math.pow(1 + {{ progressive_rate }}, revealed) * density)).toFixed(2);
+            multiplierEl.textContent = `x${mult}`;
+            cashoutEl.textContent = `₹${(bet * parseFloat(mult || 1)).toFixed(2)}`;
+        }
+
+        function resetPreview() {
+            revealed = 0;
+            finished = false;
+            tiles.forEach(tile => {
+                tile.textContent = '?';
+                tile.className = 'tile';
+            });
+            updatePreview();
+        }
+
+        document.getElementById('startBtn').addEventListener('click', resetPreview);
+        document.getElementById('resetBtn').addEventListener('click', resetPreview);
+        document.getElementById('cashBtn').addEventListener('click', () => {
+            finished = true;
+        });
+        betInput.addEventListener('input', updatePreview);
+        mineCount.addEventListener('change', updatePreview);
+
+        board.addEventListener('click', (e) => {
+            const tile = e.target.closest('.tile');
+            if (!tile || finished || tile.classList.contains('revealed')) return;
+            revealed += 1;
+            const mines = parseInt(mineCount.value || {{ mines_min }}, 10);
+            const risk = mines / Math.max(1, {{ tiles }} - (revealed - 1));
+            const hitMine = Math.random() < Math.min(0.92, Math.max(0.05, risk));
+            tile.classList.add('revealed', hitMine ? 'mine' : 'gem');
+            tile.textContent = hitMine ? '💣' : '💎';
+            if (hitMine) finished = true;
+            updatePreview();
+        });
+
+        updatePreview();
+    </script>
 </body>
 </html>

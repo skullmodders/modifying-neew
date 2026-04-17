@@ -855,12 +855,45 @@ def universal_handler(message):
             except Exception:
                 safe_send(message.chat.id, f"{pe('cross')} Enter a valid integer.")
                 return
+        elif meta["type"] == "text":
+            value = raw or "/mine"
+            if key == "mine_web_path":
+                if not value.startswith("/"):
+                    value = "/" + value
+                value = value.replace(" ", "")
         else:
             try:
                 value = float(raw)
             except Exception:
                 safe_send(message.chat.id, f"{pe('cross')} Enter a valid number.")
                 return
+
+        if key == "mine_grid_size":
+            value = max(3, min(10, int(value)))
+            max_tiles = value * value - 1
+            current_min = max(1, min(safe_int(get_setting("mine_min_mines"), 1), max_tiles))
+            current_max = max(current_min, min(safe_int(get_setting("mine_max_mines"), max_tiles), max_tiles))
+            set_setting("mine_min_mines", current_min)
+            set_setting("mine_max_mines", current_max)
+        elif key == "mine_min_mines":
+            grid = max(3, min(10, safe_int(get_setting("mine_grid_size"), 5)))
+            value = max(1, min(int(value), grid * grid - 1))
+            if value > safe_int(get_setting("mine_max_mines"), grid * grid - 1):
+                set_setting("mine_max_mines", value)
+        elif key == "mine_max_mines":
+            grid = max(3, min(10, safe_int(get_setting("mine_grid_size"), 5)))
+            value = max(1, min(int(value), grid * grid - 1))
+            if value < safe_int(get_setting("mine_min_mines"), 1):
+                set_setting("mine_min_mines", value)
+        elif key == "mine_min_bet":
+            value = max(0.0, float(value))
+            if value > safe_float(get_setting("mine_max_bet"), value):
+                set_setting("mine_max_bet", value)
+        elif key == "mine_max_bet":
+            value = max(0.0, float(value))
+            if value < safe_float(get_setting("mine_min_bet"), value):
+                set_setting("mine_min_bet", value)
+
         clear_state(user_id)
         set_setting(key, value)
         safe_send(message.chat.id, f"{pe('check')} {meta['label']} updated to <code>{h(value)}</code>")

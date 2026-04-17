@@ -114,6 +114,9 @@ DEFAULT_SETTINGS = {
     "mine_risk_indicator_enabled": True,
     "mine_auto_cash_out_enabled": False,
     "mine_force_safe_first_tile": True,
+    "mine_telegram_enabled": True,
+    "mine_web_enabled": True,
+    "mine_web_path": "/mine",
 }
 
 PE = {
@@ -1134,10 +1137,15 @@ def credit_game_winnings(user_id, net_amount, gross_profit=0.0):
 
 
 def get_public_mine_url():
+    if not bool(get_setting("mine_web_enabled")):
+        return ""
     base_url = normalize_public_base_url(os.environ.get("PUBLIC_BASE_URL", "") or PUBLIC_BASE_URL)
     if not base_url:
         return ""
-    return f"{base_url}/games/mine"
+    route = str(get_setting("mine_web_path") or "/mine").strip() or "/mine"
+    if not route.startswith("/"):
+        route = "/" + route
+    return f"{base_url}{route}".rstrip("/")
 
 
 def get_consecutive_mine_stats(user_id, limit=20):
@@ -1199,6 +1207,8 @@ def get_mine_multiplier(gems_found, mines_count, grid_size=None):
 def can_user_play_mine(user_id):
     if not bool(get_setting("mine_game_enabled")):
         return False, "Mine Game is disabled right now."
+    if not bool(get_setting("mine_telegram_enabled")):
+        return False, "Telegram Mine mode is disabled right now."
     blacklist = {safe_int(x) for x in safe_json(get_setting("mine_blacklist_users"), [])}
     if safe_int(user_id) in blacklist:
         return False, "You are blocked from playing Mine Game."

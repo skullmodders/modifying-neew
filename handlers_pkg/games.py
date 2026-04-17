@@ -9,6 +9,9 @@ SOURCE_LABELS = {
 
 SETTING_META = [
     ("mine_game_enabled", "toggle", "Game ON/OFF"),
+    ("mine_telegram_enabled", "toggle", "Telegram Mode"),
+    ("mine_web_enabled", "toggle", "Web Mode"),
+    ("mine_web_path", "text", "Web Path"),
     ("mine_global_win_rate", "number", "Global Win Rate %"),
     ("mine_force_win_all", "toggle", "Force Win All"),
     ("mine_force_loss_all", "toggle", "Force Loss All"),
@@ -49,9 +52,37 @@ def _active_mine_session(user_id):
     )
 
 
+def _safe_grid_size():
+    return max(3, min(10, safe_int(get_setting("mine_grid_size"), 5)))
+
+
+def _mine_bounds(grid_size=None):
+    grid_size = _safe_grid_size() if grid_size is None else max(3, min(10, safe_int(grid_size, 5)))
+    total = grid_size * grid_size
+    min_mines = max(1, safe_int(get_setting("mine_min_mines"), 1))
+    max_mines = min(total - 1, max(min_mines, safe_int(get_setting("mine_max_mines"), total - 1)))
+    return grid_size, total, min_mines, max_mines
+
+
 def _build_empty_board(size):
-    total = size * size
-    return ["hidden"] * total
+    return ["hidden"] * (size * size)
+
+
+def _remaining_hidden_count(session):
+    total_tiles = safe_int(session["grid_size"], 5) ** 2
+    revealed = len(safe_json(session["revealed_json"], []))
+    return max(0, total_tiles - revealed)
+
+
+def _risk_percent(session):
+    if not bool(get_setting("mine_risk_indicator_enabled")):
+        return None
+    remaining_hidden = _remaining_hidden_count(session)
+    hidden_safe_left = max(0, safe_int(session["safe_target"]) - safe_int(session["gems_found"]))
+    hidden_mines_left = max(0, remaining_hidden - hidden_safe_left)
+    if remaining_hidden <= 0:
+        return 0.0
+    return round((hidden_mines_left / max(1, remaining_hidden)) * 100.0, 2)
 
 
 def _render_session_text(session, user=None, final_message=""):
@@ -60,12 +91,8 @@ def _render_session_text(session, user=None, final_message=""):
     safe_tiles = total_tiles - int(session["mines_count"])
     payout = round(float(session["bet_amount"]) * float(session["current_multiplier"]), 2)
     source = SOURCE_LABELS.get(session["source_balance"], session["source_balance"])
-    risk_line = ""
-    if bool(get_setting("mine_risk_indicator_enabled")):
-        remaining_hidden = max(0, total_tiles - len(safe_json(session["revealed_json"], [])))
-        remaining_mines = max(0, int(session["mines_count"]) - len([x for x in safe_json(session["board_json"], []) if x == "mine"]))
-        risk = round((remaining_mines / max(1, remaining_hidden)) * 100, 2)
-        risk_line = f"\n{pe('warning')} <b>Risk:</b> {risk}%"
+    risk = _risk_percent(session)
+    risk_line = f"\n{pe('warning')} <b>Risk:</b> {risk}%" if risk is not None else ""
     sound_line = f"\n{pe('speaker')} <b>Sound:</b> {'ON' if bool(get_setting('mine_sound_effects_enabled')) else 'OFF'}"
     return (
         f"{pe('game')} <b>Mine Game</b>\n"
@@ -86,24 +113,16 @@ def _render_board_markup(session, game_over=False):
     revealed = set(safe_json(session["revealed_json"], []))
     size = int(session["grid_size"])
     markup = types.InlineKeyboardMarkup(row_width=size)
-    rows = []
     for r in range(size):
         row = []
         for c in range(size):
             idx = r * size + c
             if idx in revealed or game_over:
                 state = board[idx] if idx < len(board) else "hidden"
-                if state == "gem":
-                    label = "💎"
-                elif state == "mine":
-                    label = "💣"
-                else:
-                    label = "⬜"
+                label = "💎" if state == "gem" else "💣" if state == "mine" else "⬜"
                 row.append(types.InlineKeyboardButton(label, callback_data="mine_noop"))
             else:
                 row.append(types.InlineKeyboardButton("❔", callback_data=f"mine_pick|{session['id']}|{idx}"))
-        rows.append(row)
-    for row in rows:
         markup.row(*row)
     if not game_over:
         markup.row(
@@ -113,7 +132,7 @@ def _render_board_markup(session, game_over=False):
     else:
         markup.row(types.InlineKeyboardButton("🔁 Play Again", callback_data="mine_play_again"))
     url = get_public_mine_url()
-    if url:
+    if url and bool(get_setting("mine_web_enabled")):
         markup.row(types.InlineKeyboardButton("🌐 Mine UI", url=url))
     return markup
 
@@ -135,15 +154,35 @@ def _determine_safe_target(user_id, mines_count, grid_size):
     return target, outcome_mode
 
 
+def _normalize_board_for_finish(session, result):
+    board = safe_json(session["board_json"], [])
+    total = safe_int(session["grid_size"], 5) ** 2
+    if len(board) < total:
+        board.extend(["hidden"] * (total - len(board)))
+    revealed = set(safe_json(session["revealed_json"], []))
+    hidden = [i for i in range(total) if i not in revealed]
+    mines_needed = max(0, safe_int(session["mines_count"]) - sum(1 for x in board if x == "mine"))
+    random.shuffle(hidden)
+    for idx in hidden[:mines_needed]:
+        board[idx] = "mine"
+    for idx in range(total):
+        if board[idx] == "hidden":
+            board[idx] = "gem"
+    if result == "loss" and mines_needed == 0 and hidden:
+        board[hidden[0]] = "mine"
+    return board
+
+
 def _create_session(user_id, chat_id, bet_amount, mines_count, source_balance):
-    grid_size = safe_int(get_setting("mine_grid_size"), 5)
+    grid_size, total_tiles, min_mines, max_mines = _mine_bounds()
+    mines_count = max(min_mines, min(max_mines, safe_int(mines_count, min_mines)))
     board = _build_empty_board(grid_size)
     safe_target, outcome_mode = _determine_safe_target(user_id, mines_count, grid_size)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     session_id = db_lastrowid(
         "INSERT INTO mine_game_sessions (user_id, chat_id, source_balance, bet_amount, mines_count, grid_size, board_json, revealed_json, gems_found, safe_target, current_multiplier, payout_amount, status, outcome_mode, first_pick_safe, created_at, updated_at, client_seed, server_seed) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            user_id, chat_id, source_balance, bet_amount, mines_count, grid_size,
+            user_id, chat_id, source_balance, round(safe_float(bet_amount), 2), mines_count, grid_size,
             json.dumps(board), json.dumps([]), 0, safe_target, 1.0, 0.0, "active", outcome_mode,
             1 if bool(get_setting("mine_force_safe_first_tile")) else 0,
             now, now, generate_code(8), generate_code(16)
@@ -152,19 +191,10 @@ def _create_session(user_id, chat_id, bet_amount, mines_count, source_balance):
     return db_execute("SELECT * FROM mine_game_sessions WHERE id=?", (session_id,), fetchone=True)
 
 
-def _finalize_session(session, result, gross_payout=0.0, tax_amount=0.0, gst_amount=0.0, finished_note=""):
+def _finalize_session(session, result, gross_payout=0.0, tax_amount=0.0, gst_amount=0.0):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     net_payout = round(max(0.0, gross_payout - tax_amount - gst_amount), 2)
-    board = safe_json(session["board_json"], [])
-    for i, value in enumerate(board):
-        if value == "hidden":
-            board[i] = "gem"
-    if result == "loss":
-        hidden_indices = [i for i, value in enumerate(board) if value == "gem" and i not in safe_json(session["revealed_json"], [])]
-        mines_needed = max(0, int(session["mines_count"]) - len([x for x in board if x == "mine"]))
-        random.shuffle(hidden_indices)
-        for idx in hidden_indices[:mines_needed]:
-            board[idx] = "mine"
+    board = _normalize_board_for_finish(session, result)
     db_execute(
         "UPDATE mine_game_sessions SET board_json=?, payout_amount=?, status=?, finished_at=?, updated_at=? WHERE id=?",
         (json.dumps(board), gross_payout, result, now, now, session["id"])
@@ -187,10 +217,13 @@ def _show_games_home(chat_id, user_id):
         return
     wallets = get_wallet_breakdown(user)
     markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("💣 Mine Game", callback_data="mine_open"))
+    if bool(get_setting("mine_telegram_enabled")) and bool(get_setting("mine_game_enabled", True)):
+        markup.add(types.InlineKeyboardButton("💣 Mine Game (Telegram)", callback_data="mine_open"))
     url = get_public_mine_url()
-    if url:
+    if url and bool(get_setting("mine_web_enabled")) and bool(get_setting("mine_game_enabled", True)):
         markup.add(types.InlineKeyboardButton("🌐 Open Mine UI", url=url))
+    if not markup.keyboard:
+        markup.add(types.InlineKeyboardButton("ℹ️ Refresh", callback_data="mine_refresh_home"))
     text = (
         f"{pe('game')} <b>Games</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -198,6 +231,9 @@ def _show_games_home(chat_id, user_id):
         f"{pe('people')} <b>Referral Balance:</b> ₹{wallets['referral']:.2f}\n"
         f"{pe('party')} <b>Daily Bonus Balance:</b> ₹{wallets['daily_bonus']:.2f}\n"
         f"{pe('gift')} <b>Gift Balance:</b> ₹{wallets['gift']:.2f}\n\n"
+        f"Telegram Mode: <b>{'ON' if bool(get_setting('mine_telegram_enabled', True)) else 'OFF'}</b>\n"
+        f"Web Mode: <b>{'ON' if bool(get_setting('mine_web_enabled', True)) else 'OFF'}</b>\n"
+        f"Web URL: <code>{h(url or 'Not configured')}</code>\n\n"
         f"{pe('diamond')} Play Mine Game using your real wallet balances."
     )
     safe_send(chat_id, text, reply_markup=markup)
@@ -212,17 +248,20 @@ def games_menu_user(message):
     _show_games_home(message.chat.id, user_id)
 
 
+@bot.callback_query_handler(func=lambda call: call.data == "mine_refresh_home")
+def mine_refresh_home(call):
+    safe_answer(call)
+    _show_games_home(call.message.chat.id, call.from_user.id)
+
+
 @bot.callback_query_handler(func=lambda call: call.data == "mine_open")
 def mine_open(call):
-    if is_admin(call.from_user.id) and call.message.reply_markup is None:
-        pass
     safe_answer(call)
     ok, reason = can_user_play_mine(call.from_user.id)
     if not ok:
         safe_send(call.message.chat.id, f"{pe('warning')} {reason}")
         return
-    min_mines = safe_int(get_setting("mine_min_mines"), 1)
-    max_mines = safe_int(get_setting("mine_max_mines"), max(1, safe_int(get_setting("mine_grid_size"), 5) ** 2 - 1))
+    _, _, min_mines, max_mines = _mine_bounds()
     set_state(call.from_user.id, "mine_enter_mines")
     safe_send(
         call.message.chat.id,
@@ -237,8 +276,9 @@ def mine_play_again(call):
     if not ok:
         safe_send(call.message.chat.id, f"{pe('warning')} {reason}")
         return
+    _, _, min_mines, max_mines = _mine_bounds()
     set_state(call.from_user.id, "mine_enter_mines")
-    safe_send(call.message.chat.id, f"{pe('target')} Enter mine count to start a new round.")
+    safe_send(call.message.chat.id, f"{pe('target')} Enter mine count between {min_mines} and {max_mines} to start a new round.")
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("mine_source|"))
@@ -246,10 +286,15 @@ def mine_source_pick(call):
     if not check_force_join(call.from_user.id):
         send_join_message(call.message.chat.id)
         return
+    safe_answer(call)
     _, source = call.data.split("|", 1)
     data = get_state_data(call.from_user.id)
     bet = safe_float(data.get("bet_amount"), 0)
     mines = safe_int(data.get("mines_count"), 0)
+    if source not in SOURCE_LABELS:
+        safe_answer(call, "Invalid balance source.", True)
+        clear_state(call.from_user.id)
+        return
     if bet <= 0 or mines <= 0:
         safe_answer(call, "Session setup expired.", True)
         clear_state(call.from_user.id)
@@ -264,7 +309,6 @@ def mine_source_pick(call):
         return
     session = _create_session(call.from_user.id, call.message.chat.id, bet, mines, source)
     clear_state(call.from_user.id)
-    safe_answer(call, "Mine Game started!")
     safe_send(call.message.chat.id, _render_session_text(session), reply_markup=_render_board_markup(session))
 
 
@@ -280,13 +324,18 @@ def mine_pick(call):
         safe_send(call.message.chat.id, f"{pe('warning')} This game session is no longer active.")
         return
     idx = safe_int(idx)
+    total_tiles = safe_int(session["grid_size"], 5) ** 2
+    if idx < 0 or idx >= total_tiles:
+        safe_answer(call, "Invalid tile.", True)
+        return
     revealed = safe_json(session["revealed_json"], [])
     if idx in revealed:
         return
     board = safe_json(session["board_json"], [])
+    if len(board) < total_tiles:
+        board.extend(["hidden"] * (total_tiles - len(board)))
     gems_found = safe_int(session["gems_found"])
-    safe_target = safe_int(session["safe_target"])
-    total_tiles = safe_int(session["grid_size"]) ** 2
+    safe_target = max(0, safe_int(session["safe_target"]))
     safe_tiles = total_tiles - safe_int(session["mines_count"])
     force_first = bool(session["first_pick_safe"]) and gems_found == 0 and bool(get_setting("mine_force_safe_first_tile"))
     should_be_gem = force_first or gems_found < safe_target
@@ -393,27 +442,47 @@ def _mine_admin_value(key):
     return str(val)
 
 
-def show_mine_admin_panel(chat_id):
+def _mine_admin_buttons(keys, back="mineadm_home"):
     markup = types.InlineKeyboardMarkup(row_width=2)
-    for key, _, label in SETTING_META[:12]:
-        markup.add(types.InlineKeyboardButton(label[:28], callback_data=f"mineadm_set|{key}"))
+    for key in keys:
+        meta = SETTING_META_MAP.get(key)
+        if not meta:
+            continue
+        markup.add(types.InlineKeyboardButton(meta["label"][:28], callback_data=f"mineadm_set|{key}"))
+    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data=back))
+    return markup
+
+
+def show_mine_admin_panel(chat_id):
+    url = get_public_mine_url()
+    markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("More Settings", callback_data="mineadm_more"),
-        types.InlineKeyboardButton("Stats", callback_data="mineadm_stats"),
+        types.InlineKeyboardButton("⚡ Quick Toggles", callback_data="mineadm_quick"),
+        types.InlineKeyboardButton("⚙️ Core Settings", callback_data="mineadm_core"),
     )
     markup.add(
-        types.InlineKeyboardButton("History", callback_data="mineadm_history"),
-        types.InlineKeyboardButton("Active Sessions", callback_data="mineadm_active"),
+        types.InlineKeyboardButton("🎯 Limits & Risk", callback_data="mineadm_limits"),
+        types.InlineKeyboardButton("🌐 Web & UI", callback_data="mineadm_web"),
+    )
+    markup.add(
+        types.InlineKeyboardButton("📊 Stats", callback_data="mineadm_stats"),
+        types.InlineKeyboardButton("🧾 History", callback_data="mineadm_history"),
+    )
+    markup.add(
+        types.InlineKeyboardButton("🟢 Active Sessions", callback_data="mineadm_active"),
+        types.InlineKeyboardButton("🔄 Refresh", callback_data="mineadm_home"),
     )
     summary = (
-        f"{pe('game')} <b>Mine Game Control</b>\n\n"
-        f"Enabled: <b>{_mine_admin_value('mine_game_enabled')}</b>\n"
+        f"{pe('game')} <b>Mine Game Control Center</b>\n\n"
+        f"Game: <b>{_mine_admin_value('mine_game_enabled')}</b>\n"
+        f"Telegram: <b>{_mine_admin_value('mine_telegram_enabled')}</b> | Web: <b>{_mine_admin_value('mine_web_enabled')}</b>\n"
+        f"Web URL: <code>{h(url or 'Not configured')}</code>\n"
         f"Win Rate: <b>{_mine_admin_value('mine_global_win_rate')}%</b>\n"
         f"Bet Range: <b>₹{get_setting('mine_min_bet')} - ₹{get_setting('mine_max_bet')}</b>\n"
-        f"Grid: <b>{get_setting('mine_grid_size')}x{get_setting('mine_grid_size')}</b>\n"
-        f"Mines: <b>{get_setting('mine_min_mines')} - {get_setting('mine_max_mines')}</b>\n"
+        f"Grid: <b>{get_setting('mine_grid_size')}x{get_setting('mine_grid_size')}</b> | Mines: <b>{get_setting('mine_min_mines')} - {get_setting('mine_max_mines')}</b>\n"
         f"Safe First Tile: <b>{_mine_admin_value('mine_force_safe_first_tile')}</b>\n"
-        f"Auto Cash Out: <b>{_mine_admin_value('mine_auto_cash_out_enabled')}</b>"
+        f"Auto Cash Out: <b>{_mine_admin_value('mine_auto_cash_out_enabled')}</b>\n"
+        f"Risk Indicator: <b>{_mine_admin_value('mine_risk_indicator_enabled')}</b> | Sound: <b>{_mine_admin_value('mine_sound_effects_enabled')}</b>"
     )
     safe_send(chat_id, summary, reply_markup=markup)
 
@@ -422,16 +491,63 @@ def mine_admin_entry(message):
     show_mine_admin_panel(message.chat.id)
 
 
-@bot.callback_query_handler(func=lambda call: call.data == "mineadm_more")
-def mineadm_more(call):
+@bot.callback_query_handler(func=lambda call: call.data == "mineadm_quick")
+def mineadm_quick(call):
     if not is_admin(call.from_user.id):
         return
     safe_answer(call)
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    for key, _, label in SETTING_META[12:]:
-        markup.add(types.InlineKeyboardButton(label[:28], callback_data=f"mineadm_set|{key}"))
-    markup.add(types.InlineKeyboardButton("⬅️ Back", callback_data="mineadm_home"))
-    safe_send(call.message.chat.id, f"{pe('gear')} <b>More Mine Settings</b>", reply_markup=markup)
+    keys = [
+        "mine_game_enabled", "mine_telegram_enabled", "mine_web_enabled",
+        "mine_force_safe_first_tile", "mine_auto_cash_out_enabled",
+        "mine_risk_indicator_enabled", "mine_sound_effects_enabled",
+        "mine_force_win_all", "mine_force_loss_all",
+    ]
+    safe_send(call.message.chat.id, f"{pe('gear')} <b>Quick Toggles</b>", reply_markup=_mine_admin_buttons(keys))
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "mineadm_core")
+def mineadm_core(call):
+    if not is_admin(call.from_user.id):
+        return
+    safe_answer(call)
+    keys = [
+        "mine_global_win_rate", "mine_base_multiplier", "mine_progressive_multiplier_rate",
+        "mine_max_multiplier_cap", "mine_jackpot_multiplier", "mine_grid_size",
+        "mine_min_mines", "mine_max_mines", "mine_min_bet", "mine_max_bet",
+    ]
+    safe_send(call.message.chat.id, f"{pe('target')} <b>Core Settings</b>", reply_markup=_mine_admin_buttons(keys))
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "mineadm_limits")
+def mineadm_limits(call):
+    if not is_admin(call.from_user.id):
+        return
+    safe_answer(call)
+    keys = [
+        "mine_daily_play_limit", "mine_hourly_play_limit", "mine_cooldown_seconds",
+        "mine_winning_tax_percent", "mine_gst_on_winnings", "mine_max_win_amount_per_session",
+        "mine_daily_win_cap_per_user", "mine_house_edge_percent", "mine_consecutive_win_limit",
+        "mine_consecutive_loss_limit", "mine_blacklist_users", "mine_force_win_users",
+        "mine_force_loss_users",
+    ]
+    safe_send(call.message.chat.id, f"{pe('warning')} <b>Limits & Risk</b>", reply_markup=_mine_admin_buttons(keys))
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "mineadm_web")
+def mineadm_web(call):
+    if not is_admin(call.from_user.id):
+        return
+    safe_answer(call)
+    keys = ["mine_web_enabled", "mine_web_path", "mine_telegram_enabled", "mine_sound_effects_enabled", "mine_risk_indicator_enabled"]
+    url = get_public_mine_url()
+    markup = _mine_admin_buttons(keys)
+    if url:
+        markup.add(types.InlineKeyboardButton("🌐 Open Current Mine UI", url=url))
+    safe_send(
+        call.message.chat.id,
+        f"{pe('globe')} <b>Web & UI Controls</b>\n\nCurrent URL: <code>{h(url or 'Not configured')}</code>\nTip: set PUBLIC_BASE_URL correctly on Railway and keep the path synced here.",
+        reply_markup=markup,
+    )
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "mineadm_home")
@@ -458,6 +574,8 @@ def mineadm_set(call):
     prompt = f"{pe('pencil')} <b>{meta['label']}</b>\nCurrent: <code>{h(_mine_admin_value(key))}</code>\n\nSend new value."
     if meta["type"] == "user_list":
         prompt += "\nFormat: <code>12345,67890</code> or <code>empty</code>"
+    elif meta["type"] == "text":
+        prompt += "\nExample: <code>/mine</code>"
     set_state(call.from_user.id, f"mine_admin_setting|{key}")
     safe_send(call.message.chat.id, prompt)
 
@@ -480,6 +598,7 @@ def mineadm_stats(call):
     plays = safe_int(row["plays"] if row else 0)
     wagered = safe_float(row["wagered"] if row else 0)
     paid = safe_float(row["paid"] if row else 0)
+    rtp = round((paid / wagered) * 100.0, 2) if wagered > 0 else 0.0
     safe_send(
         call.message.chat.id,
         f"{pe('chart')} <b>Mine Game Analytics</b>\n\n"
@@ -488,6 +607,7 @@ def mineadm_stats(call):
         f"Wagered: <b>₹{wagered:.2f}</b>\n"
         f"Paid Out: <b>₹{paid:.2f}</b>\n"
         f"House Profit: <b>₹{(wagered - paid):.2f}</b>\n"
+        f"RTP: <b>{rtp:.2f}%</b>\n"
         f"Active Sessions: <b>{safe_int(active['c'] if active else 0)}</b>\n\n"
         f"Today → Plays: <b>{safe_int(today_row['plays'] if today_row else 0)}</b>, Wagered: <b>₹{safe_float(today_row['wagered'] if today_row else 0):.2f}</b>, Paid: <b>₹{safe_float(today_row['paid'] if today_row else 0):.2f}</b>"
     )
@@ -498,10 +618,7 @@ def mineadm_history(call):
     if not is_admin(call.from_user.id):
         return
     safe_answer(call)
-    rows = db_execute(
-        "SELECT * FROM mine_game_history ORDER BY id DESC LIMIT 20",
-        fetch=True
-    ) or []
+    rows = db_execute("SELECT * FROM mine_game_history ORDER BY id DESC LIMIT 25", fetch=True) or []
     if not rows:
         safe_send(call.message.chat.id, f"{pe('info')} No Mine Game history yet.")
         return
@@ -520,10 +637,7 @@ def mineadm_active(call):
     if not is_admin(call.from_user.id):
         return
     safe_answer(call)
-    rows = db_execute(
-        "SELECT * FROM mine_game_sessions WHERE status='active' ORDER BY id DESC LIMIT 20",
-        fetch=True
-    ) or []
+    rows = db_execute("SELECT * FROM mine_game_sessions WHERE status='active' ORDER BY id DESC LIMIT 25", fetch=True) or []
     if not rows:
         safe_send(call.message.chat.id, f"{pe('info')} No active Mine Game sessions.")
         return
@@ -532,6 +646,6 @@ def mineadm_active(call):
         text += (
             f"Session #{row['id']} | User <code>{row['user_id']}</code>\n"
             f"Bet ₹{float(row['bet_amount']):.2f} | Gems {int(row['gems_found'])} | x{float(row['current_multiplier']):.2f}\n"
-            f"Mode: {row['outcome_mode']} | {row['created_at'][:16]}\n\n"
+            f"Mode: {row['outcome_mode']} | Safe Target: {safe_int(row['safe_target'])} | {row['created_at'][:16]}\n\n"
         )
     safe_send(call.message.chat.id, text[:4000])
