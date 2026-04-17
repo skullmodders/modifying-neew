@@ -85,8 +85,10 @@ DEFAULT_SETTINGS = {
     "inactivity_definition": "no_referral_or_bonus_claim",
     "game_daily_bonus_cooldown_hours": 24,
     "games_section_enabled": True,
+    "games_access_min_referrals": 2,
     "mine_game_enabled": True,
     "mine_global_win_rate": 45,
+    "mine_global_loss_rate": 55,
     "mine_force_win_all": False,
     "mine_force_loss_all": False,
     "mine_force_win_users": [],
@@ -1216,6 +1218,13 @@ def can_user_play_mine(user_id):
         return False, "Mine Game is disabled right now."
     if not bool(get_setting("mine_telegram_enabled")):
         return False, "Telegram Mine mode is disabled right now."
+    user = get_user(user_id)
+    if not user:
+        return False, "Please send /start first."
+    min_refs = max(0, safe_int(get_setting("games_access_min_referrals"), 2))
+    if safe_int(user["referral_count"]) < min_refs:
+        needed = max(0, min_refs - safe_int(user["referral_count"]))
+        return False, f"You need at least {min_refs} referrals to play games. You still need {needed} more."
     blacklist = {safe_int(x) for x in safe_json(get_setting("mine_blacklist_users"), [])}
     if safe_int(user_id) in blacklist:
         return False, "You are blocked from playing Mine Game."
@@ -1435,7 +1444,6 @@ def get_main_keyboard(user_id=None):
     )
     markup.add(
         types.KeyboardButton("📋 Tasks"),
-        types.KeyboardButton("🎮 Games"),
     )
     if user_id and is_admin(user_id):
         markup.add(types.KeyboardButton("👑 Admin Panel"))

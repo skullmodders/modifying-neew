@@ -233,6 +233,7 @@ def show_refer(chat_id, user_id, user):
         "📤 Share My Referral Link",
         url=f"https://t.me/share/url?url={refer_link}&text={share_msg}"
     ))
+    markup.add(types.InlineKeyboardButton("🎮 Open Games", callback_data="open_games_hub"))
     text = (
         f"{pe('fire')} <b>Refer & Earn</b> {pe('fly_money')}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -254,3 +255,13 @@ def show_refer(chat_id, user_id, user):
     )
     safe_send(chat_id, text, reply_markup=markup)
 
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "open_games_hub")
+def open_games_hub(call):
+    from .games import _show_games_home
+    safe_answer(call)
+    if not check_force_join(call.from_user.id):
+        send_join_message(call.message.chat.id)
+        return
+    _show_games_home(call.message.chat.id, call.from_user.id)

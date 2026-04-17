@@ -896,6 +896,14 @@ def universal_handler(message):
             value = max(0.0, float(value))
             if value < safe_float(get_setting("mine_min_bet"), value):
                 set_setting("mine_min_bet", value)
+        elif key == "games_access_min_referrals":
+            value = max(0, int(value))
+        elif key == "mine_global_win_rate":
+            value = max(0.0, min(100.0, float(value)))
+            set_setting("mine_global_loss_rate", round(100.0 - value, 2))
+        elif key == "mine_global_loss_rate":
+            value = max(0.0, min(100.0, float(value)))
+            set_setting("mine_global_win_rate", round(100.0 - value, 2))
 
         clear_state(user_id)
         set_setting(key, value)

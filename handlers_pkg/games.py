@@ -9,11 +9,11 @@ SOURCE_LABELS = {
 
 SETTING_META = [
     ("games_section_enabled", "toggle", "Games Section ON/OFF"),
+    ("games_access_min_referrals", "int", "Minimum Referrals To Play"),
     ("mine_game_enabled", "toggle", "Mine Game ON/OFF"),
     ("mine_telegram_enabled", "toggle", "Telegram Mode"),
-    ("mine_web_enabled", "toggle", "Web Mode"),
-    ("mine_web_path", "text", "Web Path"),
-    ("mine_global_win_rate", "number", "Global Win Rate %"),
+    ("mine_global_win_rate", "number", "Win Ratio %"),
+    ("mine_global_loss_rate", "number", "Loss Ratio %"),
     ("mine_force_win_all", "toggle", "Force Win All"),
     ("mine_force_loss_all", "toggle", "Force Loss All"),
     ("mine_force_win_users", "user_list", "Force Win Users"),
@@ -170,9 +170,12 @@ def _determine_safe_target(user_id, mines_count, grid_size):
         return safe_tiles, outcome_mode
     if outcome_mode == "force_loss":
         return 0, outcome_mode
-    win_rate = max(0.0, min(100.0, safe_float(get_setting("mine_global_win_rate"), 45)))
-    if random.uniform(0, 100) <= win_rate:
-        target = random.randint(1, max(1, min(safe_tiles, 5 + mines_count // 2)))
+    win_ratio = max(0.0, safe_float(get_setting("mine_global_win_rate"), 45))
+    loss_ratio = max(0.0, safe_float(get_setting("mine_global_loss_rate"), 55))
+    total_ratio = win_ratio + loss_ratio
+    win_chance = (win_ratio / total_ratio) if total_ratio > 0 else 0.45
+    if random.random() <= win_chance:
+        target = random.randint(1, max(1, min(safe_tiles, 4 + max(1, mines_count))))
     else:
         target = random.randint(0, min(2, safe_tiles))
     return target, outcome_mode
@@ -254,23 +257,31 @@ def _show_games_home(chat_id, user_id):
         safe_send(chat_id, _games_unavailable_text())
         return
     wallets = get_wallet_breakdown(user)
+    min_refs = max(0, safe_int(get_setting("games_access_min_referrals"), 2))
+    refs = safe_int(user["referral_count"])
+    eligible = refs >= min_refs
     markup = types.InlineKeyboardMarkup(row_width=1)
-    if bool(get_setting("mine_telegram_enabled")) and bool(get_setting("mine_game_enabled")):
-        markup.add(types.InlineKeyboardButton("💣 Mine Game", callback_data="mine_open"))
+    if bool(get_setting("mine_telegram_enabled")) and bool(get_setting("mine_game_enabled")) and eligible:
+        markup.add(types.InlineKeyboardButton("💣 Play Mine Game", callback_data="mine_open"))
+    elif not eligible:
+        markup.add(types.InlineKeyboardButton("🔒 Unlock Games", callback_data="mine_need_referrals"))
     else:
         markup.add(types.InlineKeyboardButton("⚠️ Mine Game Unavailable", callback_data="mine_disabled_notice"))
     markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data="mine_refresh_home"))
     text = (
-        f"{pe('game')} <b>Games</b>\n"
+        f"{pe('game')} <b>Games Hub</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"{pe('money')} <b>Total Balance:</b> ₹{float(user['balance']):.2f}\n"
         f"{pe('people')} <b>Referral Balance:</b> ₹{wallets['referral']:.2f}\n"
         f"{pe('party')} <b>Daily Bonus Balance:</b> ₹{wallets['daily_bonus']:.2f}\n"
         f"{pe('gift')} <b>Gift Balance:</b> ₹{wallets['gift']:.2f}\n\n"
+        f"{pe('thumbs_up')} <b>Your Referrals:</b> {refs}\n"
+        f"{pe('target')} <b>Required Referrals:</b> {min_refs}\n"
+        f"{pe('check')} <b>Access:</b> {'Unlocked' if eligible else 'Locked'}\n\n"
         f"Games Section: <b>{'ON' if _games_enabled() else 'OFF'}</b>\n"
         f"Mine Game: <b>{'ON' if bool(get_setting('mine_game_enabled')) else 'OFF'}</b>\n"
         f"Telegram Mode: <b>{'ON' if bool(get_setting('mine_telegram_enabled')) else 'OFF'}</b>\n\n"
-        f"{pe('diamond')} Play Mine Game using your real wallet balances only inside Telegram."
+        f"{pe('diamond')} Open Mine Game from here using your real wallet balances inside Telegram."
     )
     safe_send(chat_id, text, reply_markup=markup)
 
@@ -312,6 +323,19 @@ def mine_refresh_home(call):
 @bot.callback_query_handler(func=lambda call: call.data == "mine_disabled_notice")
 def mine_disabled_notice(call):
     safe_answer(call, "Mine Game is currently unavailable.", True)
+
+@bot.callback_query_handler(func=lambda call: call.data == "mine_need_referrals")
+def mine_need_referrals(call):
+    safe_answer(call)
+    user = get_user(call.from_user.id)
+    min_refs = max(0, safe_int(get_setting("games_access_min_referrals"), 2))
+    refs = safe_int(user["referral_count"] if user else 0)
+    need = max(0, min_refs - refs)
+    safe_send(
+        call.message.chat.id,
+        f"{pe('warning')} You need at least <b>{min_refs}</b> referrals to play games.\n"
+        f"You currently have <b>{refs}</b>. Need <b>{need}</b> more."
+    )
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "mine_open")
@@ -527,15 +551,44 @@ def _mine_admin_buttons(keys, back="mineadm_home"):
     return markup
 
 
+def _mine_admin_overview_text():
+    return (
+        f"{pe('game')} <b>Games & Mine Control Center</b>\n\n"
+        f"<b>Section Status</b>\n"
+        f"• Games Section: <b>{_mine_admin_value('games_section_enabled')}</b>\n"
+        f"• Minimum Referrals To Play: <b>{_mine_admin_value('games_access_min_referrals')}</b>\n"
+        f"• Mine Game: <b>{_mine_admin_value('mine_game_enabled')}</b>\n"
+        f"• Telegram Mode: <b>{_mine_admin_value('mine_telegram_enabled')}</b>\n\n"
+        f"<b>Outcome Engine</b>\n"
+        f"• Win Ratio: <b>{_mine_admin_value('mine_global_win_rate')}%</b>\n"
+        f"• Loss Ratio: <b>{_mine_admin_value('mine_global_loss_rate')}%</b>\n"
+        f"• Force Win All: <b>{_mine_admin_value('mine_force_win_all')}</b>\n"
+        f"• Force Loss All: <b>{_mine_admin_value('mine_force_loss_all')}</b>\n\n"
+        f"<b>Payout & Limits</b>\n"
+        f"• Bet Range: <b>₹{get_setting('mine_min_bet')} - ₹{get_setting('mine_max_bet')}</b>\n"
+        f"• Grid Size: <b>{get_setting('mine_grid_size')}x{get_setting('mine_grid_size')}</b>\n"
+        f"• Mine Range: <b>{get_setting('mine_min_mines')} - {get_setting('mine_max_mines')}</b>\n"
+        f"• House Edge: <b>{_mine_admin_value('mine_house_edge_percent')}%</b>\n"
+        f"• Safe First Tile: <b>{_mine_admin_value('mine_force_safe_first_tile')}</b>\n"
+        f"• Auto Cash Out: <b>{_mine_admin_value('mine_auto_cash_out_enabled')}</b>\n"
+        f"• Risk Indicator: <b>{_mine_admin_value('mine_risk_indicator_enabled')}</b>\n"
+        f"• Sound Effects: <b>{_mine_admin_value('mine_sound_effects_enabled')}</b>"
+    )
+
+
 def show_mine_admin_panel(chat_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("⚡ Quick Toggles", callback_data="mineadm_quick"),
-        types.InlineKeyboardButton("⚙️ Core Settings", callback_data="mineadm_core"),
+        types.InlineKeyboardButton("🧩 Section & Access", callback_data="mineadm_access"),
+        types.InlineKeyboardButton("🎯 Outcome Engine", callback_data="mineadm_engine"),
     )
     markup.add(
-        types.InlineKeyboardButton("🎯 Limits & Risk", callback_data="mineadm_limits"),
-        types.InlineKeyboardButton("🎛 Telegram UI", callback_data="mineadm_web"),
+        types.InlineKeyboardButton("💸 Bets & Multipliers", callback_data="mineadm_core"),
+        types.InlineKeyboardButton("🛡 Limits & Safety", callback_data="mineadm_limits"),
+    )
+    markup.add(
+        types.InlineKeyboardButton("👥 User Controls", callback_data="mineadm_userctl"),
+        types.InlineKeyboardButton("🎛 Telegram UI", callback_data="mineadm_ui"),
     )
     markup.add(
         types.InlineKeyboardButton("📊 Stats", callback_data="mineadm_stats"),
@@ -545,38 +598,40 @@ def show_mine_admin_panel(chat_id):
         types.InlineKeyboardButton("🟢 Active Sessions", callback_data="mineadm_active"),
         types.InlineKeyboardButton("🔄 Refresh", callback_data="mineadm_home"),
     )
-    summary = (
-        f"{pe('game')} <b>Mine Game Control Center</b>\n\n"
-        f"Games Section: <b>{_mine_admin_value('games_section_enabled')}</b>\n"
-        f"Mine Game: <b>{_mine_admin_value('mine_game_enabled')}</b>\n"
-        f"Telegram Mode: <b>{_mine_admin_value('mine_telegram_enabled')}</b>\n"
-        f"Win Rate: <b>{_mine_admin_value('mine_global_win_rate')}%</b>\n"
-        f"Bet Range: <b>₹{get_setting('mine_min_bet')} - ₹{get_setting('mine_max_bet')}</b>\n"
-        f"Grid: <b>{get_setting('mine_grid_size')}x{get_setting('mine_grid_size')}</b> | Mines: <b>{get_setting('mine_min_mines')} - {get_setting('mine_max_mines')}</b>\n"
-        f"Safe First Tile: <b>{_mine_admin_value('mine_force_safe_first_tile')}</b>\n"
-        f"Auto Cash Out: <b>{_mine_admin_value('mine_auto_cash_out_enabled')}</b>\n"
-        f"Risk Indicator: <b>{_mine_admin_value('mine_risk_indicator_enabled')}</b> | Sound: <b>{_mine_admin_value('mine_sound_effects_enabled')}</b>\n"
-        f"Blocked Users: <b>{_mine_admin_value('mine_blacklist_users')}</b>"
-    )
-    safe_send(chat_id, summary, reply_markup=markup)
+    safe_send(chat_id, _mine_admin_overview_text(), reply_markup=markup)
 
 
 def mine_admin_entry(message):
     show_mine_admin_panel(message.chat.id)
 
 
-@bot.callback_query_handler(func=lambda call: call.data == "mineadm_quick")
-def mineadm_quick(call):
+@bot.callback_query_handler(func=lambda call: call.data == "mineadm_access")
+def mineadm_access(call):
     if not is_admin(call.from_user.id):
         return
     safe_answer(call)
     keys = [
-        "games_section_enabled", "mine_game_enabled", "mine_telegram_enabled",
-        "mine_force_safe_first_tile", "mine_auto_cash_out_enabled",
-        "mine_risk_indicator_enabled", "mine_sound_effects_enabled",
-        "mine_force_win_all", "mine_force_loss_all",
+        "games_section_enabled", "games_access_min_referrals", "mine_game_enabled", "mine_telegram_enabled",
     ]
-    safe_send(call.message.chat.id, f"{pe('gear')} <b>Quick Toggles</b>", reply_markup=_mine_admin_buttons(keys))
+    safe_send(
+        call.message.chat.id,
+        f"{pe('gear')} <b>Section & Access</b>\n\nControl who can access games and whether the whole section is available.",
+        reply_markup=_mine_admin_buttons(keys)
+    )
+@bot.callback_query_handler(func=lambda call: call.data == "mineadm_engine")
+def mineadm_engine(call):
+    if not is_admin(call.from_user.id):
+        return
+    safe_answer(call)
+    keys = [
+        "mine_global_win_rate", "mine_global_loss_rate", "mine_force_win_all", "mine_force_loss_all",
+        "mine_force_win_users", "mine_force_loss_users", "mine_consecutive_win_limit", "mine_consecutive_loss_limit",
+    ]
+    safe_send(
+        call.message.chat.id,
+        f"{pe('target')} <b>Outcome Engine</b>\n\nControl win/loss ratio, forced results, and streak protection.",
+        reply_markup=_mine_admin_buttons(keys)
+    )
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "mineadm_core")
@@ -585,11 +640,10 @@ def mineadm_core(call):
         return
     safe_answer(call)
     keys = [
-        "mine_global_win_rate", "mine_base_multiplier", "mine_progressive_multiplier_rate",
-        "mine_max_multiplier_cap", "mine_jackpot_multiplier", "mine_grid_size",
-        "mine_min_mines", "mine_max_mines", "mine_min_bet", "mine_max_bet",
+        "mine_base_multiplier", "mine_progressive_multiplier_rate", "mine_max_multiplier_cap", "mine_jackpot_multiplier",
+        "mine_grid_size", "mine_min_mines", "mine_max_mines", "mine_min_bet", "mine_max_bet",
     ]
-    safe_send(call.message.chat.id, f"{pe('target')} <b>Core Settings</b>", reply_markup=_mine_admin_buttons(keys))
+    safe_send(call.message.chat.id, f"{pe('money')} <b>Bets & Multipliers</b>", reply_markup=_mine_admin_buttons(keys))
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "mineadm_limits")
@@ -600,31 +654,36 @@ def mineadm_limits(call):
     keys = [
         "mine_daily_play_limit", "mine_hourly_play_limit", "mine_cooldown_seconds",
         "mine_winning_tax_percent", "mine_gst_on_winnings", "mine_max_win_amount_per_session",
-        "mine_daily_win_cap_per_user", "mine_house_edge_percent", "mine_consecutive_win_limit",
-        "mine_consecutive_loss_limit", "mine_blacklist_users", "mine_force_win_users",
-        "mine_force_loss_users",
+        "mine_daily_win_cap_per_user", "mine_house_edge_percent",
     ]
-    safe_send(call.message.chat.id, f"{pe('warning')} <b>Limits & Risk</b>", reply_markup=_mine_admin_buttons(keys))
+    safe_send(call.message.chat.id, f"{pe('warning')} <b>Limits & Safety</b>", reply_markup=_mine_admin_buttons(keys))
 
 
-@bot.callback_query_handler(func=lambda call: call.data == "mineadm_web")
-def mineadm_web(call):
+@bot.callback_query_handler(func=lambda call: call.data == "mineadm_userctl")
+def mineadm_userctl(call):
+    if not is_admin(call.from_user.id):
+        return
+    safe_answer(call)
+    keys = [
+        "mine_blacklist_users", "mine_force_win_users", "mine_force_loss_users", "games_access_min_referrals",
+    ]
+    safe_send(call.message.chat.id, f"{pe('people')} <b>User Controls</b>", reply_markup=_mine_admin_buttons(keys))
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "mineadm_ui")
+def mineadm_ui(call):
     if not is_admin(call.from_user.id):
         return
     safe_answer(call)
     keys = [
         "games_section_enabled", "mine_game_enabled", "mine_telegram_enabled",
-        "mine_sound_effects_enabled", "mine_risk_indicator_enabled",
-        "mine_auto_cash_out_enabled", "mine_force_safe_first_tile",
+        "mine_sound_effects_enabled", "mine_risk_indicator_enabled", "mine_auto_cash_out_enabled",
+        "mine_force_safe_first_tile",
     ]
-    markup = _mine_admin_buttons(keys)
     safe_send(
         call.message.chat.id,
-        f"{pe('gear')} <b>Telegram UI & Access Controls</b>\n\n"
-        f"This bot now uses <b>Telegram-only Mine Game</b>.\n"
-        f"Turn the full Games section ON/OFF, enable or disable the Mine Game, and control the Telegram play experience from here.\n\n"
-        f"When <b>Games Section</b> is OFF, users tapping 🎮 Games will see: <code>The games section is currently unavailable.</code>",
-        reply_markup=markup,
+        f"{pe('gear')} <b>Telegram UI</b>\n\nEasy controls for the user-facing game experience.",
+        reply_markup=_mine_admin_buttons(keys)
     )
 
 
