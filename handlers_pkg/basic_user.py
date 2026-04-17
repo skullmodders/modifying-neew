@@ -153,7 +153,7 @@ def balance_handler(message):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("🏧 Withdraw", callback_data="open_withdraw"),
-        types.InlineKeyboardButton("👥 Refer & Earn", callback_data="open_refer"),
+        types.InlineKeyboardButton("💸 Earn & Refer", callback_data="open_refer"),
     )
     markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data="refresh_balance"))
     text = (
@@ -179,7 +179,7 @@ def refresh_balance(call):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("🏧 Withdraw", callback_data="open_withdraw"),
-        types.InlineKeyboardButton("👥 Refer & Earn", callback_data="open_refer"),
+        types.InlineKeyboardButton("💸 Earn & Refer", callback_data="open_refer"),
     )
     markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data="refresh_balance"))
     text = (
@@ -198,7 +198,7 @@ def refresh_balance(call):
     safe_answer(call, "✅ Refreshed!")
 
 # ======================== REFER ========================
-@bot.message_handler(func=lambda m: m.text == "👥 Refer")
+@bot.message_handler(func=lambda m: m.text in {"👥 Refer", "💸 Earn & Refer"})
 def refer_handler(message):
     user_id = message.from_user.id
     if not check_force_join(user_id):

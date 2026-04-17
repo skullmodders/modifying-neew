@@ -61,7 +61,7 @@ def universal_handler(message):
         if text == "💰 Balance":
             balance_handler(message)
             return
-        if text == "👥 Refer":
+        if text in {"👥 Refer", "💸 Earn & Refer"}:
             refer_handler(message)
             return
         if text == "🏧 Withdraw":

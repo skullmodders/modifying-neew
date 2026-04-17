@@ -116,7 +116,7 @@ DEFAULT_SETTINGS = {
     "mine_auto_cash_out_enabled": False,
     "mine_force_safe_first_tile": True,
     "mine_telegram_enabled": True,
-    "mine_web_enabled": True,
+    "mine_web_enabled": False,
     "mine_web_path": "/mine",
 }
 
@@ -1138,17 +1138,7 @@ def credit_game_winnings(user_id, net_amount, gross_profit=0.0):
 
 
 def get_public_mine_url():
-    if not bool(get_setting("games_section_enabled")):
-        return ""
-    if not bool(get_setting("mine_web_enabled")):
-        return ""
-    base_url = normalize_public_base_url(os.environ.get("PUBLIC_BASE_URL", "") or PUBLIC_BASE_URL)
-    if not base_url:
-        return ""
-    route = str(get_setting("mine_web_path") or "/mine").strip() or "/mine"
-    if not route.startswith("/"):
-        route = "/" + route
-    return f"{base_url}{route}".rstrip("/")
+    return ""
 
 
 def get_consecutive_mine_stats(user_id, limit=20):
@@ -1208,6 +1198,18 @@ def get_mine_multiplier(gems_found, mines_count, grid_size=None):
 
 
 def can_user_play_mine(user_id):
+    try:
+        db_execute(
+            "UPDATE mine_game_sessions SET status='expired', finished_at=?, updated_at=? WHERE status='active' AND user_id=? AND updated_at < ?",
+            (
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                safe_int(user_id),
+                (datetime.now() - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S"),
+            )
+        )
+    except Exception:
+        pass
     if not bool(get_setting("games_section_enabled")):
         return False, "The games section is currently unavailable."
     if not bool(get_setting("mine_game_enabled")):
@@ -1425,7 +1427,7 @@ def get_main_keyboard(user_id=None):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add(
         types.KeyboardButton("💰 Balance"),
-        types.KeyboardButton("👥 Refer"),
+        types.KeyboardButton("💸 Earn & Refer"),
     )
     markup.add(
         types.KeyboardButton("🏧 Withdraw"),

@@ -159,9 +159,6 @@ def _render_board_markup(session, game_over=False):
         )
     else:
         markup.row(types.InlineKeyboardButton("🔁 Play Again", callback_data="mine_play_again"))
-    url = get_public_mine_url()
-    if url and bool(get_setting("mine_web_enabled")) and _games_enabled():
-        markup.row(types.InlineKeyboardButton("🌐 Mine UI", url=url))
     return markup
 
 
@@ -259,10 +256,9 @@ def _show_games_home(chat_id, user_id):
     wallets = get_wallet_breakdown(user)
     markup = types.InlineKeyboardMarkup(row_width=1)
     if bool(get_setting("mine_telegram_enabled")) and bool(get_setting("mine_game_enabled")):
-        markup.add(types.InlineKeyboardButton("💣 Mine Game (Telegram)", callback_data="mine_open"))
-    url = get_public_mine_url()
-    if url and bool(get_setting("mine_web_enabled")) and bool(get_setting("mine_game_enabled")):
-        markup.add(types.InlineKeyboardButton("🌐 Open Mine UI", url=url))
+        markup.add(types.InlineKeyboardButton("💣 Mine Game", callback_data="mine_open"))
+    else:
+        markup.add(types.InlineKeyboardButton("⚠️ Mine Game Unavailable", callback_data="mine_disabled_notice"))
     markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data="mine_refresh_home"))
     text = (
         f"{pe('game')} <b>Games</b>\n"
@@ -273,10 +269,8 @@ def _show_games_home(chat_id, user_id):
         f"{pe('gift')} <b>Gift Balance:</b> ₹{wallets['gift']:.2f}\n\n"
         f"Games Section: <b>{'ON' if _games_enabled() else 'OFF'}</b>\n"
         f"Mine Game: <b>{'ON' if bool(get_setting('mine_game_enabled')) else 'OFF'}</b>\n"
-        f"Telegram Mode: <b>{'ON' if bool(get_setting('mine_telegram_enabled')) else 'OFF'}</b>\n"
-        f"Web Mode: <b>{'ON' if bool(get_setting('mine_web_enabled')) else 'OFF'}</b>\n"
-        f"Web URL: <code>{h(url or 'Not configured')}</code>\n\n"
-        f"{pe('diamond')} Play Mine Game using your real wallet balances."
+        f"Telegram Mode: <b>{'ON' if bool(get_setting('mine_telegram_enabled')) else 'OFF'}</b>\n\n"
+        f"{pe('diamond')} Play Mine Game using your real wallet balances only inside Telegram."
     )
     safe_send(chat_id, text, reply_markup=markup)
 
@@ -313,6 +307,11 @@ def games_menu_user(message):
 def mine_refresh_home(call):
     safe_answer(call)
     _show_games_home(call.message.chat.id, call.from_user.id)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "mine_disabled_notice")
+def mine_disabled_notice(call):
+    safe_answer(call, "Mine Game is currently unavailable.", True)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "mine_open")
@@ -529,7 +528,6 @@ def _mine_admin_buttons(keys, back="mineadm_home"):
 
 
 def show_mine_admin_panel(chat_id):
-    url = get_public_mine_url()
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("⚡ Quick Toggles", callback_data="mineadm_quick"),
@@ -537,7 +535,7 @@ def show_mine_admin_panel(chat_id):
     )
     markup.add(
         types.InlineKeyboardButton("🎯 Limits & Risk", callback_data="mineadm_limits"),
-        types.InlineKeyboardButton("🌐 Web & UI", callback_data="mineadm_web"),
+        types.InlineKeyboardButton("🎛 Telegram UI", callback_data="mineadm_web"),
     )
     markup.add(
         types.InlineKeyboardButton("📊 Stats", callback_data="mineadm_stats"),
@@ -551,14 +549,14 @@ def show_mine_admin_panel(chat_id):
         f"{pe('game')} <b>Mine Game Control Center</b>\n\n"
         f"Games Section: <b>{_mine_admin_value('games_section_enabled')}</b>\n"
         f"Mine Game: <b>{_mine_admin_value('mine_game_enabled')}</b>\n"
-        f"Telegram: <b>{_mine_admin_value('mine_telegram_enabled')}</b> | Web: <b>{_mine_admin_value('mine_web_enabled')}</b>\n"
-        f"Web URL: <code>{h(url or 'Not configured')}</code>\n"
+        f"Telegram Mode: <b>{_mine_admin_value('mine_telegram_enabled')}</b>\n"
         f"Win Rate: <b>{_mine_admin_value('mine_global_win_rate')}%</b>\n"
         f"Bet Range: <b>₹{get_setting('mine_min_bet')} - ₹{get_setting('mine_max_bet')}</b>\n"
         f"Grid: <b>{get_setting('mine_grid_size')}x{get_setting('mine_grid_size')}</b> | Mines: <b>{get_setting('mine_min_mines')} - {get_setting('mine_max_mines')}</b>\n"
         f"Safe First Tile: <b>{_mine_admin_value('mine_force_safe_first_tile')}</b>\n"
         f"Auto Cash Out: <b>{_mine_admin_value('mine_auto_cash_out_enabled')}</b>\n"
-        f"Risk Indicator: <b>{_mine_admin_value('mine_risk_indicator_enabled')}</b> | Sound: <b>{_mine_admin_value('mine_sound_effects_enabled')}</b>"
+        f"Risk Indicator: <b>{_mine_admin_value('mine_risk_indicator_enabled')}</b> | Sound: <b>{_mine_admin_value('mine_sound_effects_enabled')}</b>\n"
+        f"Blocked Users: <b>{_mine_admin_value('mine_blacklist_users')}</b>"
     )
     safe_send(chat_id, summary, reply_markup=markup)
 
@@ -573,7 +571,7 @@ def mineadm_quick(call):
         return
     safe_answer(call)
     keys = [
-        "games_section_enabled", "mine_game_enabled", "mine_telegram_enabled", "mine_web_enabled",
+        "games_section_enabled", "mine_game_enabled", "mine_telegram_enabled",
         "mine_force_safe_first_tile", "mine_auto_cash_out_enabled",
         "mine_risk_indicator_enabled", "mine_sound_effects_enabled",
         "mine_force_win_all", "mine_force_loss_all",
@@ -614,14 +612,18 @@ def mineadm_web(call):
     if not is_admin(call.from_user.id):
         return
     safe_answer(call)
-    keys = ["mine_web_enabled", "mine_web_path", "mine_telegram_enabled", "mine_sound_effects_enabled", "mine_risk_indicator_enabled"]
-    url = get_public_mine_url()
+    keys = [
+        "games_section_enabled", "mine_game_enabled", "mine_telegram_enabled",
+        "mine_sound_effects_enabled", "mine_risk_indicator_enabled",
+        "mine_auto_cash_out_enabled", "mine_force_safe_first_tile",
+    ]
     markup = _mine_admin_buttons(keys)
-    if url:
-        markup.add(types.InlineKeyboardButton("🌐 Open Current Mine UI", url=url))
     safe_send(
         call.message.chat.id,
-        f"{pe('globe')} <b>Web & UI Controls</b>\n\nCurrent URL: <code>{h(url or 'Not configured')}</code>\nAliases live on: <code>/mine</code>, <code>/mine-game</code>, <code>/games/mine</code> and your custom path.\nIf the game page is disabled, it will still open but show unavailable status.",
+        f"{pe('gear')} <b>Telegram UI & Access Controls</b>\n\n"
+        f"This bot now uses <b>Telegram-only Mine Game</b>.\n"
+        f"Turn the full Games section ON/OFF, enable or disable the Mine Game, and control the Telegram play experience from here.\n\n"
+        f"When <b>Games Section</b> is OFF, users tapping 🎮 Games will see: <code>The games section is currently unavailable.</code>",
         reply_markup=markup,
     )
 
