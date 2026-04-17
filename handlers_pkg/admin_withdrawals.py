@@ -44,7 +44,7 @@ def confirm_withdraw_cb(call):
         f"{pe('fly_money')} <b>Amount:</b> ₹{amount}\n"
         f"{pe('link')} <b>UPI:</b> <code>{upi_id}</code>\n"
         f"{pe('hourglass')} <b>Status:</b> Pending ⏳\n\n"
-        f"📋 <i>10% GST deducted for UPI Processing & Management</i>\n"
+        f"📋 <i>{tax['total_tax']:.2f} tax/GST deducted for UPI Processing & Management</i>\n"
         f"{pe('info')} Will be processed soon!\n"
         f"{pe('bell')} You'll be notified.\n"
         f"━━━━━━━━━━━━━━━━━━━━━━"
@@ -62,10 +62,10 @@ def confirm_withdraw_cb(call):
             f"{pe('siren')} <b>New Withdrawal!</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"{pe('info')} <b>ID:</b> #{w_id}\n"
-            f"{pe('disguise')} <b>User:</b> {user['first_name']} (<code>{user_id}</code>)\n"
+            f"{pe('disguise')} <b>User:</b> {h(user['first_name'])} (<code>{user_id}</code>)\n"
             f"{pe('fly_money')} <b>Amount:</b> ₹{amount}\n"
             f"{pe('link')} <b>UPI:</b> <code>{upi_id}</code>\n"
-            f"{pe('money')} <b>Remaining:</b> ₹{user['balance'] - amount:.2f}\n"
+            f"{pe('money')} <b>Remaining:</b> ₹{user['balance'] - tax['total_debit']:.2f}\n"
             f"{pe('thumbs_up')} <b>Referrals:</b> {user['referral_count']}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━",
             parse_mode="HTML",

@@ -67,6 +67,7 @@ def start_handler(message):
             pass
 
 def send_welcome(chat_id, user_id, first_name, is_new=False):
+    grant_welcome_bonus_if_eligible(user_id)
     user = get_user(user_id)
     if not user:
         return

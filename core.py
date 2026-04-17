@@ -8,6 +8,7 @@ import string
 import json
 import re
 import html
+import functools
 from datetime import datetime
 import os
 import csv
@@ -37,6 +38,7 @@ DEFAULT_SETTINGS = {
     "welcome_bonus": 0.5,
     "daily_bonus": 0.5,
     "max_withdraw_per_day": 100,
+    "max_single_withdraw_amount": 100,
     "withdraw_enabled": True,
     "refer_enabled": True,
     "gift_enabled": True,
@@ -155,8 +157,93 @@ def pe(name):
         return f'<tg-emoji emoji-id="{eid}">⭐</tg-emoji>'
     return "⭐"
 
+
+def h(value):
+    return html.escape(str(value or ""), quote=False)
+
+
+def _telegram_plain_text(value):
+    value = str(value or "")
+    value = re.sub(r"</?tg-emoji[^>]*>", "", value)
+    value = re.sub(r"<br\s*/?>", "\n", value, flags=re.IGNORECASE)
+    value = re.sub(r"</p\s*>", "\n", value, flags=re.IGNORECASE)
+    value = re.sub(r"<[^>]+>", "", value)
+    return html.unescape(value)
+
+
+def _telegram_error_text(exc):
+    try:
+        return str(exc or "")
+    except Exception:
+        return ""
+
+
+def _is_entity_parse_error(exc):
+    text = _telegram_error_text(exc).lower()
+    return "can't parse entities" in text or "unexpected end tag" in text or "can't find end tag" in text
+
+
+def _is_unreachable_chat_error(exc):
+    text = _telegram_error_text(exc).lower()
+    markers = [
+        "bot was blocked by the user",
+        "user is deactivated",
+        "chat not found",
+        "forbidden: bot was kicked",
+        "forbidden: user is deactivated",
+    ]
+    return any(marker in text for marker in markers)
+
+
+def _wrap_telegram_call(method_name, text_arg_index=None, caption_arg_index=None):
+    original = getattr(bot, method_name)
+
+    @functools.wraps(original)
+    def wrapper(*args, **kwargs):
+        try:
+            return original(*args, **kwargs)
+        except Exception as exc:
+            if _is_unreachable_chat_error(exc):
+                print(f"{method_name} skipped: {_telegram_error_text(exc)}")
+                return None
+            if not _is_entity_parse_error(exc):
+                raise
+
+            retry_args = list(args)
+            retry_kwargs = dict(kwargs)
+            retry_kwargs.pop("parse_mode", None)
+
+            if text_arg_index is not None:
+                if len(retry_args) > text_arg_index:
+                    retry_args[text_arg_index] = _telegram_plain_text(retry_args[text_arg_index])
+                elif "text" in retry_kwargs:
+                    retry_kwargs["text"] = _telegram_plain_text(retry_kwargs.get("text", ""))
+            if caption_arg_index is not None:
+                if len(retry_args) > caption_arg_index:
+                    retry_args[caption_arg_index] = _telegram_plain_text(retry_args[caption_arg_index])
+                elif "caption" in retry_kwargs:
+                    retry_kwargs["caption"] = _telegram_plain_text(retry_kwargs.get("caption", ""))
+
+            try:
+                return original(*retry_args, **retry_kwargs)
+            except Exception as retry_exc:
+                if _is_unreachable_chat_error(retry_exc):
+                    print(f"{method_name} skipped: {_telegram_error_text(retry_exc)}")
+                    return None
+                raise retry_exc
+
+    setattr(bot, method_name, wrapper)
+
 # ======================== BOT INIT ========================
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
+_wrap_telegram_call("send_message", text_arg_index=1)
+_wrap_telegram_call("edit_message_text", text_arg_index=0)
+_wrap_telegram_call("send_photo", caption_arg_index=2)
+_wrap_telegram_call("send_video", caption_arg_index=2)
+_wrap_telegram_call("send_document", caption_arg_index=2)
+_wrap_telegram_call("send_animation", caption_arg_index=2)
+_wrap_telegram_call("send_audio", caption_arg_index=3)
+_wrap_telegram_call("send_voice", caption_arg_index=2)
 # ======================== DATABASE ========================
 DB_PATH = os.environ.get("DB_PATH", "/data/bot_database.db")
 DB_LOCK = threading.Lock()
@@ -188,6 +275,7 @@ def init_db():
             referral_paid INTEGER DEFAULT 0,
             ip_address TEXT DEFAULT '',
             ip_verified INTEGER DEFAULT 0,
+            welcome_bonus_paid INTEGER DEFAULT 0,
             bonus_balance REAL DEFAULT 0,
             last_active_at TEXT DEFAULT '',
             total_referral_earnings REAL DEFAULT 0
@@ -324,6 +412,10 @@ def init_db():
     except:
         pass
     try:
+        c.execute("ALTER TABLE users ADD COLUMN welcome_bonus_paid INTEGER DEFAULT 1")
+    except:
+        pass
+    try:
         c.execute("ALTER TABLE users ADD COLUMN bonus_balance REAL DEFAULT 0")
     except:
         pass
@@ -372,6 +464,7 @@ def init_db():
         )
 
     # Force redeem-code withdrawal rules from code so old DB values do not keep overriding them
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("max_single_withdraw_amount", (c.execute("SELECT value FROM settings WHERE key='max_single_withdraw_amount'").fetchone() or {"value": json.dumps(DEFAULT_SETTINGS["max_single_withdraw_amount"])} )["value"]))
     c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("redeem_min_withdraw", json.dumps(DEFAULT_SETTINGS["redeem_min_withdraw"])))
     c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("redeem_multiple_of", json.dumps(DEFAULT_SETTINGS["redeem_multiple_of"])))
     c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("redeem_gst_cut", json.dumps(DEFAULT_SETTINGS["redeem_gst_cut"])))
@@ -424,6 +517,13 @@ def db_lastrowid(query, params=()):
             conn.close()
 
 def get_setting(key):
+    if key == "max_withdraw_per_day":
+        alias_row = db_execute("SELECT value FROM settings WHERE key=?", ("max_single_withdraw_amount",), fetchone=True)
+        if alias_row:
+            try:
+                return json.loads(alias_row["value"])
+            except Exception:
+                return alias_row["value"]
     row = db_execute("SELECT value FROM settings WHERE key=?", (key,), fetchone=True)
     if row:
         try:
@@ -437,6 +537,16 @@ def set_setting(key, value):
         "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
         (key, json.dumps(value))
     )
+    if key == "max_withdraw_per_day":
+        db_execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            ("max_single_withdraw_amount", json.dumps(value))
+        )
+    elif key == "max_single_withdraw_amount":
+        db_execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            ("max_withdraw_per_day", json.dumps(value))
+        )
 
 def get_user(user_id):
     return db_execute("SELECT * FROM users WHERE user_id=?", (user_id,), fetchone=True)
@@ -648,16 +758,15 @@ def show_redeem_withdraw(chat_id, user_id):
 
 def create_user(user_id, username, first_name, referred_by=0):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    welcome_bonus = get_setting("welcome_bonus") or 0
     existing = get_user(user_id)
     if existing:
         return False
 
     db_execute(
         "INSERT OR IGNORE INTO users "
-        "(user_id, username, first_name, balance, total_earned, referred_by, joined_at, referral_paid, ip_address, ip_verified, bonus_balance, last_active_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-        (user_id, username or "", first_name or "User", welcome_bonus, welcome_bonus, referred_by, now, 0, "", 0, welcome_bonus, now)
+        "(user_id, username, first_name, balance, total_earned, referred_by, joined_at, referral_paid, ip_address, ip_verified, welcome_bonus_paid, bonus_balance, last_active_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (user_id, username or "", first_name or "User", 0.0, 0.0, referred_by, now, 0, "", 0, 0, 0.0, now)
     )
 
     if referred_by and referred_by != user_id:
@@ -675,6 +784,41 @@ def create_user(user_id, username, first_name, referred_by=0):
                 pass
 
     return True
+
+
+def grant_welcome_bonus_if_eligible(user_id):
+    user = get_user(user_id)
+    if not user:
+        return False
+    if int(user["welcome_bonus_paid"] or 0) == 1:
+        return False
+    if check_force_join(user_id) is False:
+        return False
+    if is_ip_verification_required() and int(user["ip_verified"] or 0) != 1:
+        return False
+    bonus = float(get_setting("welcome_bonus") or 0)
+    update_fields = {"welcome_bonus_paid": 1}
+    if bonus > 0:
+        update_fields.update(
+            balance=float(user["balance"] or 0) + bonus,
+            total_earned=float(user["total_earned"] or 0) + bonus,
+            bonus_balance=float(user["bonus_balance"] or 0) + bonus,
+        )
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        db_execute(
+            "INSERT INTO bonus_history (user_id, amount, bonus_type, created_at) VALUES (?,?,?,?)",
+            (user_id, bonus, "welcome_bonus", now),
+        )
+    update_user(user_id, **update_fields)
+    return True
+
+
+def get_referral_base_amount():
+    level1_type = str(get_setting("referral_level_1_type") or "fixed").lower()
+    level1_value = float(get_setting("referral_level_1_value") or 0)
+    if level1_type == "percent":
+        return float(get_setting("per_refer") or level1_value or 0)
+    return level1_value
 
 
 def update_user(user_id, **kwargs):
@@ -740,7 +884,7 @@ def process_referral_bonus(user_id):
     if not chain:
         db_execute("UPDATE users SET referral_paid=1 WHERE user_id=?", (user_id,))
         return False
-    base_amount = float(get_referral_reward(1, 0) or 0)
+    base_amount = float(get_referral_base_amount() or 0)
     paid_any = False
     for level, parent in chain:
         reward = get_referral_reward(level, base_amount)
@@ -866,8 +1010,16 @@ def safe_send(chat_id, text, **kwargs):
     try:
         return bot.send_message(chat_id, text, parse_mode="HTML", **kwargs)
     except Exception as e:
+        if _is_unreachable_chat_error(e):
+            print(f"safe_send skipped for {chat_id}: {e}")
+            return None
         print(f"safe_send error to {chat_id}: {e}")
-        return None
+        try:
+            plain_kwargs = dict(kwargs)
+            plain_kwargs.pop("parse_mode", None)
+            return bot.send_message(chat_id, _telegram_plain_text(text), **plain_kwargs)
+        except Exception:
+            return None
 
 def safe_edit(chat_id, message_id, text, **kwargs):
     try:
@@ -877,7 +1029,15 @@ def safe_edit(chat_id, message_id, text, **kwargs):
         )
     except Exception as e:
         print(f"safe_edit error: {e}")
-        return None
+        try:
+            plain_kwargs = dict(kwargs)
+            plain_kwargs.pop("parse_mode", None)
+            return bot.edit_message_text(
+                _telegram_plain_text(text), chat_id=chat_id, message_id=message_id,
+                **plain_kwargs
+            )
+        except Exception:
+            return None
 
 def safe_answer(call, text="", alert=False):
     try:

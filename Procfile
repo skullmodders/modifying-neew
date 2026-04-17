@@ -1,1 +1,1 @@
-web: sh -c "python web_verify.py & python main.py"
+web: sh -c "python main.py & gunicorn web_server:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 120"
