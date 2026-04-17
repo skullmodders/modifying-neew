@@ -1,5 +1,5 @@
 from core import *
-from .basic_user import send_db, start_handler, balance_handler, refer_handler
+from .basic_user import send_db, start_handler, balance_handler, refer_handler, back_user_panel
 from .user_withdraw_gift import withdraw_handler, gift_handler
 from .user_tasks import tasks_handler
 from .admin_main import (
@@ -73,7 +73,10 @@ def universal_handler(message):
         if text == "📋 Tasks":
             tasks_handler(message)
             return
-        if text == "🎮 Games" and not is_admin(user_id):
+        if text == "🎮 Games":
+            if not check_force_join(user_id):
+                send_join_message(message.chat.id)
+                return
             _show_games_home(message.chat.id, user_id)
             return
         if text == "👑 Admin Panel" and is_admin(user_id):

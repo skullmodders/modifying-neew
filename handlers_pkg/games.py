@@ -203,8 +203,13 @@ def _show_games_home(chat_id, user_id):
     safe_send(chat_id, text, reply_markup=markup)
 
 
+@bot.message_handler(func=lambda m: m.text == "🎮 Games")
 def games_menu_user(message):
-    _show_games_home(message.chat.id, message.from_user.id)
+    user_id = message.from_user.id
+    if not check_force_join(user_id):
+        send_join_message(message.chat.id)
+        return
+    _show_games_home(message.chat.id, user_id)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "mine_open")
