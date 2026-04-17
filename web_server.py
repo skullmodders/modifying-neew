@@ -1,3 +1,4 @@
+
 import os
 import logging
 import sqlite3
@@ -33,13 +34,29 @@ def setting(key, default=None):
         return default
 
 
+def normalize_path(path_value, fallback="/mine"):
+    path_value = str(path_value or fallback).strip() or fallback
+    if not path_value.startswith("/"):
+        path_value = "/" + path_value
+    path_value = "/" + path_value.strip("/")
+    return path_value or fallback
+
+
+def normalized_aliases():
+    aliases = {
+        "/mine",
+        "/mine-game",
+        "/games/mine",
+        normalize_path(setting("mine_web_path", "/mine"), "/mine"),
+    }
+    return aliases
+
+
 def mine_context():
     grid_size = max(3, min(10, int(setting("mine_grid_size", 5) or 5)))
     mines_min = max(1, int(setting("mine_min_mines", 1) or 1))
     mines_max = min(grid_size * grid_size - 1, int(setting("mine_max_mines", max(1, grid_size * grid_size - 1)) or max(1, grid_size * grid_size - 1)))
-    route_path = str(setting("mine_web_path", "/mine") or "/mine").strip() or "/mine"
-    if not route_path.startswith("/"):
-        route_path = "/" + route_path
+    route_path = normalize_path(setting("mine_web_path", "/mine"), "/mine")
     return {
         "grid_size": grid_size,
         "tiles": grid_size * grid_size,
@@ -51,6 +68,7 @@ def mine_context():
         "progressive_rate": setting("mine_progressive_multiplier_rate", 0.24),
         "max_cap": setting("mine_max_multiplier_cap", 25),
         "jackpot": setting("mine_jackpot_multiplier", 50),
+        "games_enabled": bool(setting("games_section_enabled", True)),
         "enabled": bool(setting("mine_game_enabled", True)),
         "telegram_enabled": bool(setting("mine_telegram_enabled", True)),
         "web_enabled": bool(setting("mine_web_enabled", True)),
@@ -63,19 +81,28 @@ def mine_context():
     }
 
 
+def should_serve_mine(path_value):
+    normalized = normalize_path(path_value, "/mine")
+    return normalized in normalized_aliases()
+
+
+def render_mine_page():
+    ctx = mine_context()
+    return render_template("mine.html", **ctx)
+
+
 @app.route("/")
 def root():
+    if should_serve_mine("/mine"):
+        return redirect("/mine")
     return redirect("/ping")
 
 
-@app.route("/mine")
-@app.route("/mine-game")
-@app.route("/games/mine")
-def mine_ui():
-    ctx = mine_context()
-    if not ctx["web_enabled"] or not ctx["enabled"]:
-        return render_template("mine.html", **ctx)
-    return render_template("mine.html", **ctx)
+@app.route("/mine", strict_slashes=False)
+@app.route("/mine-game", strict_slashes=False)
+@app.route("/games/mine", strict_slashes=False)
+def mine_ui_aliases():
+    return render_mine_page()
 
 
 @app.route("/debug")
@@ -86,10 +113,12 @@ def debug_info():
         "db_path": DB_PATH,
         "bot": BOT_USERNAME,
         "mine_route": ctx["route_path"],
+        "mine_aliases": sorted(list(normalized_aliases())),
+        "games_enabled": ctx["games_enabled"],
         "mine_game_enabled": ctx["enabled"],
         "mine_web_enabled": ctx["web_enabled"],
         "mine_telegram_enabled": ctx["telegram_enabled"],
-        "env_vars": list(os.environ.keys())
+        "request_path": request.path,
     }
 
 
@@ -98,14 +127,11 @@ def ping():
     return "pong"
 
 
-
-
-@app.route("/<path:any_path>")
+@app.route("/<path:any_path>", strict_slashes=False)
 def dynamic_pages(any_path):
-    ctx = mine_context()
-    current = "/" + (any_path or "").strip("/")
-    if current == ctx["route_path"]:
-        return render_template("mine.html", **ctx)
+    requested = normalize_path(any_path)
+    if should_serve_mine(requested):
+        return render_mine_page()
     return not_found(None)
 
 
@@ -114,7 +140,7 @@ def not_found(e):
     return {
         "error": "Not Found",
         "message": "Invalid route",
-        "valid_routes": ["/ping", "/debug", "/mine", "/mine-game", "/games/mine"]
+        "valid_routes": sorted(list(normalized_aliases())) + ["/ping", "/debug"],
     }, 404
 
 

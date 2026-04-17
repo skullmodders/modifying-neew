@@ -74,6 +74,9 @@ def universal_handler(message):
             tasks_handler(message)
             return
         if text == "🎮 Games":
+            if not bool(get_setting("games_section_enabled")):
+                safe_send(message.chat.id, "The games section is currently unavailable.")
+                return
             if not check_force_join(user_id):
                 send_join_message(message.chat.id)
                 return

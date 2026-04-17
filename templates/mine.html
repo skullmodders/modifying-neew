@@ -133,12 +133,14 @@
     <div class="wrap">
         <div class="card">
             <div class="row">
+                {% if not games_enabled %}<div class="badge off">Games Section OFF</div>{% endif %}
                 <div class="badge {{ 'ok' if enabled else 'off' }}">Game {{ 'Enabled' if enabled else 'Disabled' }}</div>
                 <div class="badge {{ 'ok' if telegram_enabled else 'off' }}">Telegram {{ 'ON' if telegram_enabled else 'OFF' }}</div>
                 <div class="badge {{ 'ok' if web_enabled else 'off' }}">Web {{ 'ON' if web_enabled else 'OFF' }}</div>
             </div>
             <h1>💣 Mine Game UI</h1>
             <p class="muted">This page is now safer for Railway deployment. It works on <code>/mine</code>, <code>/mine-game</code>, and <code>/games/mine</code> so route mismatch issues are much less likely.</p>
+            {% if not games_enabled %}<p class="muted" style="color:#fca5a5"><b>The games section is currently unavailable.</b></p>{% elif not enabled or not web_enabled %}<p class="muted" style="color:#fca5a5"><b>Mine web mode is currently unavailable.</b></p>{% endif %}
 
             <label>Bet amount</label>
             <input id="bet" type="number" min="{{ min_bet }}" max="{{ max_bet }}" value="{{ min_bet }}" />

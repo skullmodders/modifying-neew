@@ -84,6 +84,7 @@ DEFAULT_SETTINGS = {
     "inactivity_min_balance_floor": 1,
     "inactivity_definition": "no_referral_or_bonus_claim",
     "game_daily_bonus_cooldown_hours": 24,
+    "games_section_enabled": True,
     "mine_game_enabled": True,
     "mine_global_win_rate": 45,
     "mine_force_win_all": False,
@@ -1137,6 +1138,8 @@ def credit_game_winnings(user_id, net_amount, gross_profit=0.0):
 
 
 def get_public_mine_url():
+    if not bool(get_setting("games_section_enabled")):
+        return ""
     if not bool(get_setting("mine_web_enabled")):
         return ""
     base_url = normalize_public_base_url(os.environ.get("PUBLIC_BASE_URL", "") or PUBLIC_BASE_URL)
@@ -1205,6 +1208,8 @@ def get_mine_multiplier(gems_found, mines_count, grid_size=None):
 
 
 def can_user_play_mine(user_id):
+    if not bool(get_setting("games_section_enabled")):
+        return False, "The games section is currently unavailable."
     if not bool(get_setting("mine_game_enabled")):
         return False, "Mine Game is disabled right now."
     if not bool(get_setting("mine_telegram_enabled")):
