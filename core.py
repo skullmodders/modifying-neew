@@ -5,6 +5,7 @@ import threading
 import time
 import random
 import string
+import shutil
 import json
 import re
 import html
@@ -14,6 +15,7 @@ import os
 import csv
 import io
 from urllib.parse import urlparse
+from pathlib import Path
 from telebot.types import WebAppInfo
 from anticheat import AntiCheatSystem
 from broadcast import BroadcastSystem
@@ -120,6 +122,24 @@ DEFAULT_SETTINGS = {
     "mine_telegram_enabled": True,
     "mine_web_enabled": False,
     "mine_web_path": "/mine",
+    "warning_threshold": 3,
+    "warning_auto_action": "ban",
+    "roles_enabled": True,
+    "advanced_admin_panel_enabled": True,
+    "admin_alerts_enabled": True,
+    "feature_toggle_games": True,
+    "feature_toggle_tasks": True,
+    "feature_toggle_withdrawals": True,
+    "feature_toggle_gifts": True,
+    "feature_toggle_referrals": True,
+    "feature_toggle_bonus": True,
+    "announcement_enabled": False,
+    "announcement_text": "",
+    "support_inbox_enabled": True,
+    "referral_fraud_detection_enabled": True,
+    "referral_fraud_min_same_ip": 2,
+    "referral_fraud_min_new_refs_24h": 5,
+    "game_leaderboard_enabled": True,
 }
 
 PE = {
@@ -478,6 +498,81 @@ def init_db():
             created_at TEXT DEFAULT '',
             finished_at TEXT DEFAULT ''
         );
+
+        CREATE TABLE IF NOT EXISTS user_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            admin_id INTEGER DEFAULT 0,
+            note TEXT DEFAULT '',
+            created_at TEXT DEFAULT '',
+            updated_at TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS user_warnings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            admin_id INTEGER DEFAULT 0,
+            reason TEXT DEFAULT '',
+            status TEXT DEFAULT 'active',
+            created_at TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS user_tiers (
+            user_id INTEGER PRIMARY KEY,
+            tier_name TEXT DEFAULT 'Bronze',
+            tier_level INTEGER DEFAULT 1,
+            perks_json TEXT DEFAULT '{}',
+            assigned_by INTEGER DEFAULT 0,
+            assigned_at TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS user_activity_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            activity_type TEXT DEFAULT '',
+            details TEXT DEFAULT '',
+            created_at TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS user_device_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            ip_address TEXT DEFAULT '',
+            device_hint TEXT DEFAULT '',
+            risk_flag TEXT DEFAULT '',
+            created_at TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS financial_audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER DEFAULT 0,
+            admin_id INTEGER DEFAULT 0,
+            entry_type TEXT DEFAULT '',
+            amount REAL DEFAULT 0,
+            balance_type TEXT DEFAULT 'main',
+            details TEXT DEFAULT '',
+            created_at TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS referral_fraud_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            suspicious_user_id INTEGER DEFAULT 0,
+            reason TEXT DEFAULT '',
+            score INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'flagged',
+            created_at TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS system_error_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            module TEXT DEFAULT '',
+            user_id INTEGER DEFAULT 0,
+            error_text TEXT DEFAULT '',
+            context TEXT DEFAULT '',
+            created_at TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS platform_backups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            backup_name TEXT DEFAULT '',
+            backup_path TEXT DEFAULT '',
+            created_by INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT ''
+        );
+
         CREATE INDEX IF NOT EXISTS idx_mine_sessions_user_status ON mine_game_sessions(user_id, status);
         CREATE INDEX IF NOT EXISTS idx_mine_history_user_created ON mine_game_history(user_id, created_at);
     """)
@@ -554,6 +649,16 @@ def init_db():
     except:
         pass
 
+
+    try:
+        c.execute("ALTER TABLE admins ADD COLUMN role TEXT DEFAULT 'manager'")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE admins ADD COLUMN display_name TEXT DEFAULT ''")
+    except:
+        pass
+
     for key, value in DEFAULT_SETTINGS.items():
         c.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
@@ -593,6 +698,7 @@ def db_execute(query, params=(), fetch=False, fetchone=False):
         except Exception as e:
             conn.rollback()
             print(f"DB Error: {e} | Query: {query}")
+            log_system_error('database', e, query[:1200])
             return None
         finally:
             conn.close()
@@ -1287,16 +1393,46 @@ def is_admin(user_id):
 def is_super_admin(user_id):
     return int(user_id) == int(ADMIN_ID)
 
-def get_all_admins():
-    return db_execute("SELECT * FROM admins WHERE is_active=1", fetch=True) or []
+def get_admin(user_id):
+    return db_execute("SELECT * FROM admins WHERE user_id=?", (int(user_id),), fetchone=True)
 
-def add_admin(user_id, username, first_name, added_by, permissions="all"):
+def admin_has_permission(user_id, permission="panel"):
+    if is_super_admin(user_id):
+        return True
+    admin = get_admin(user_id)
+    if not admin or not int(admin["is_active"]):
+        return False
+    perms_raw = str(admin["permissions"] or "")
+    if perms_raw in ("all", "*"):
+        return True
+    perms = {p.strip().lower() for p in perms_raw.split(",") if p.strip()}
+    role = str((admin["role"] if "role" in admin.keys() else "manager") or "manager").lower()
+    role_map = {
+        "support": {"panel", "users_view", "users_notes", "users_warnings", "broadcast"},
+        "finance": {"panel", "finance", "reports", "withdrawals", "audit", "users_view"},
+        "game": {"panel", "games", "reports", "users_view"},
+        "manager": {"panel", "users_view", "users_notes", "users_warnings", "users_tiers", "withdrawals", "broadcast", "reports", "games", "settings"},
+    }
+    effective = perms | role_map.get(role, set())
+    return permission.lower() in effective
+
+def get_all_admins():
+    return db_execute("SELECT * FROM admins WHERE is_active=1 ORDER BY added_at DESC", fetch=True) or []
+
+def add_admin(user_id, username, first_name, added_by, permissions="all", role="manager"):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     db_execute(
-        "INSERT OR REPLACE INTO admins (user_id, username, first_name, added_by, added_at, permissions, is_active) "
-        "VALUES (?,?,?,?,?,?,?)",
-        (int(user_id), username or "", first_name or "", int(added_by), now, permissions, 1)
+        "INSERT OR REPLACE INTO admins (user_id, username, first_name, added_by, added_at, permissions, is_active, role, display_name) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (int(user_id), username or "", first_name or "", int(added_by), now, permissions, 1, role, first_name or "")
     )
+
+def set_admin_role(user_id, role, permissions=None):
+    role = str(role or "manager").lower()
+    if permissions is None:
+        current = get_admin(user_id)
+        permissions = current["permissions"] if current else ""
+    db_execute("UPDATE admins SET role=?, permissions=?, is_active=1 WHERE user_id=?", (role, permissions, int(user_id)))
 
 def remove_admin(user_id):
     db_execute("UPDATE admins SET is_active=0 WHERE user_id=?", (int(user_id),))
@@ -1314,6 +1450,131 @@ def get_admin_logs(limit=50):
         (limit,), fetch=True
     ) or []
 
+def log_user_activity(user_id, activity_type, details=""):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db_execute("INSERT INTO user_activity_logs (user_id, activity_type, details, created_at) VALUES (?,?,?,?)", (int(user_id), activity_type, details, now))
+
+def get_user_activity(user_id, limit=20):
+    return db_execute("SELECT * FROM user_activity_logs WHERE user_id=? ORDER BY id DESC LIMIT ?", (int(user_id), int(limit)), fetch=True) or []
+
+def add_user_note(user_id, admin_id, note):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db_execute("INSERT INTO user_notes (user_id, admin_id, note, created_at, updated_at) VALUES (?,?,?,?,?)", (int(user_id), int(admin_id), str(note), now, now))
+    log_admin_action(admin_id, "user_note", f"note added for {user_id}")
+
+def get_user_notes(user_id, limit=10):
+    return db_execute("SELECT * FROM user_notes WHERE user_id=? ORDER BY id DESC LIMIT ?", (int(user_id), int(limit)), fetch=True) or []
+
+def add_user_warning(user_id, admin_id, reason):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db_execute("INSERT INTO user_warnings (user_id, admin_id, reason, status, created_at) VALUES (?,?,?,?,?)", (int(user_id), int(admin_id), str(reason), 'active', now))
+    threshold = max(1, safe_int(get_setting('warning_threshold'), 3))
+    active_count = db_execute("SELECT COUNT(*) AS c FROM user_warnings WHERE user_id=? AND status='active'", (int(user_id),), fetchone=True)
+    if active_count and safe_int(active_count['c']) >= threshold:
+        action = str(get_setting('warning_auto_action') or 'ban').lower()
+        if action == 'ban':
+            update_user(int(user_id), banned=1)
+    log_admin_action(admin_id, "user_warning", f"warning added for {user_id}: {reason}")
+
+def get_user_warnings(user_id, limit=10):
+    return db_execute("SELECT * FROM user_warnings WHERE user_id=? ORDER BY id DESC LIMIT ?", (int(user_id), int(limit)), fetch=True) or []
+
+def clear_user_warnings(user_id):
+    db_execute("UPDATE user_warnings SET status='cleared' WHERE user_id=? AND status='active'", (int(user_id),))
+
+def set_user_tier(user_id, tier_name, tier_level=1, perks=None, admin_id=0):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    perks = json.dumps(perks or {})
+    db_execute("INSERT OR REPLACE INTO user_tiers (user_id, tier_name, tier_level, perks_json, assigned_by, assigned_at) VALUES (?,?,?,?,?,?)", (int(user_id), str(tier_name), int(tier_level), perks, int(admin_id), now))
+    log_admin_action(admin_id, "set_user_tier", f"{user_id} => {tier_name}")
+
+def get_user_tier(user_id):
+    row = db_execute("SELECT * FROM user_tiers WHERE user_id=?", (int(user_id),), fetchone=True)
+    if row:
+        return row
+    return {"user_id": int(user_id), "tier_name": "Bronze", "tier_level": 1, "perks_json": "{}", "assigned_by": 0, "assigned_at": ""}
+
+def log_financial_audit(user_id=0, admin_id=0, entry_type="", amount=0, balance_type="main", details=""):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db_execute("INSERT INTO financial_audit_logs (user_id, admin_id, entry_type, amount, balance_type, details, created_at) VALUES (?,?,?,?,?,?,?)", (int(user_id or 0), int(admin_id or 0), str(entry_type), safe_float(amount), str(balance_type), str(details), now))
+
+def get_financial_audit_logs(limit=50):
+    return db_execute("SELECT * FROM financial_audit_logs ORDER BY id DESC LIMIT ?", (int(limit),), fetch=True) or []
+
+def log_referral_fraud(user_id, suspicious_user_id=0, reason="", score=0, status="flagged"):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db_execute("INSERT INTO referral_fraud_logs (user_id, suspicious_user_id, reason, score, status, created_at) VALUES (?,?,?,?,?,?)", (int(user_id), int(suspicious_user_id or 0), str(reason), int(score or 0), str(status), now))
+
+def get_referral_fraud_logs(limit=50):
+    return db_execute("SELECT * FROM referral_fraud_logs ORDER BY id DESC LIMIT ?", (int(limit),), fetch=True) or []
+
+def log_system_error(module="", error_text="", context="", user_id=0):
+    try:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        db_execute("INSERT INTO system_error_logs (module, user_id, error_text, context, created_at) VALUES (?,?,?,?,?)", (str(module), int(user_id or 0), str(error_text)[:1500], str(context)[:1500], now))
+    except Exception:
+        pass
+
+def get_system_error_logs(limit=50):
+    return db_execute("SELECT * FROM system_error_logs ORDER BY id DESC LIMIT ?", (int(limit),), fetch=True) or []
+
+def create_platform_backup(created_by=0):
+    try:
+        backup_dir = Path(DB_DIR) / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_name = f"bot_backup_{stamp}.db"
+        backup_path = backup_dir / backup_name
+        shutil.copy2(DB_PATH, backup_path)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        db_execute("INSERT INTO platform_backups (backup_name, backup_path, created_by, created_at) VALUES (?,?,?,?)", (backup_name, str(backup_path), int(created_by or 0), now))
+        log_admin_action(created_by, "create_backup", backup_name)
+        return str(backup_path)
+    except Exception as e:
+        log_system_error("backup", e, "create_platform_backup", created_by)
+        return ""
+
+def get_platform_backups(limit=20):
+    return db_execute("SELECT * FROM platform_backups ORDER BY id DESC LIMIT ?", (int(limit),), fetch=True) or []
+
+def search_users_admin(term, limit=20):
+    q = f"%{str(term or '').strip()}%"
+    if not q.strip('%'):
+        return []
+    return db_execute(
+        "SELECT * FROM users WHERE CAST(user_id AS TEXT) LIKE ? OR username LIKE ? OR first_name LIKE ? OR upi_id LIKE ? ORDER BY joined_at DESC LIMIT ?",
+        (q, q, q, q, int(limit)), fetch=True
+    ) or []
+
+def get_referral_analytics_snapshot():
+    today = datetime.now().strftime('%Y-%m-%d')
+    stats = {}
+    stats['today_referred_joins'] = safe_int((db_execute("SELECT COUNT(*) as c FROM users WHERE joined_at LIKE ? AND referred_by!=0", (f"{today}%",), fetchone=True) or {'c':0})['c'])
+    stats['total_referral_earnings'] = safe_float((db_execute("SELECT SUM(total_referral_earnings) as s FROM users", fetchone=True) or {'s':0})['s'])
+    stats['top_referrers'] = db_execute("SELECT user_id, first_name, username, referral_count, total_referral_earnings FROM users ORDER BY referral_count DESC, total_referral_earnings DESC LIMIT 10", fetch=True) or []
+    stats['same_ip_groups'] = scan_referral_fraud(500) if bool(get_setting('referral_fraud_detection_enabled')) else []
+    return stats
+
+def scan_referral_fraud(limit_users=100):
+    if not bool(get_setting('referral_fraud_detection_enabled')):
+        return []
+    min_same_ip = max(2, safe_int(get_setting('referral_fraud_min_same_ip'), 2))
+    findings = []
+    rows = db_execute("SELECT user_id, ip_address, referred_by, referral_count, joined_at FROM users ORDER BY joined_at DESC LIMIT ?", (int(limit_users),), fetch=True) or []
+    by_ip = {}
+    for row in rows:
+        ip = str(row['ip_address'] or '').strip()
+        if not ip:
+            continue
+        by_ip.setdefault(ip, []).append(row)
+    for ip, members in by_ip.items():
+        if len(members) >= min_same_ip:
+            owner = members[0]['user_id']
+            for m in members[1:]:
+                log_referral_fraud(owner, m['user_id'], f'Same IP cluster: {ip}', min(100, 20*len(members)), 'flagged')
+            findings.append((ip, len(members)))
+    return findings
+
 # ======================== SAFE SEND / EDIT ========================
 def safe_send(chat_id, text, **kwargs):
     try:
@@ -1323,6 +1584,7 @@ def safe_send(chat_id, text, **kwargs):
             print(f"safe_send skipped for {chat_id}: {e}")
             return None
         print(f"safe_send error to {chat_id}: {e}")
+        log_system_error('safe_send', e, f'chat_id={chat_id}')
         try:
             plain_kwargs = dict(kwargs)
             plain_kwargs.pop("parse_mode", None)
@@ -1461,14 +1723,23 @@ def get_admin_keyboard():
     )
     markup.add(
         types.KeyboardButton("🧠 Advanced Settings"),
+        types.KeyboardButton("🧩 Feature Toggles"),
     )
     markup.add(
         types.KeyboardButton("📢 Broadcast"),
-        types.KeyboardButton("🎁 Gift Manager"),
+        types.KeyboardButton("📣 Announcements"),
     )
     markup.add(
+        types.KeyboardButton("🎁 Gift Manager"),
         types.KeyboardButton("🎟 Redeem Codes"),
+    )
+    markup.add(
         types.KeyboardButton("🎮 Game Control"),
+        types.KeyboardButton("📈 Reports"),
+    )
+    markup.add(
+        types.KeyboardButton("🛡 Fraud Control"),
+        types.KeyboardButton("🔎 User Search"),
     )
     markup.add(
         types.KeyboardButton("📋 Task Manager"),
@@ -1476,6 +1747,10 @@ def get_admin_keyboard():
     )
     markup.add(
         types.KeyboardButton("👮 Admin Manager"),
+        types.KeyboardButton("🧾 Audit Logs"),
+    )
+    markup.add(
+        types.KeyboardButton("🗃 Backups"),
         types.KeyboardButton("🔙 User Panel"),
     )
     return markup

@@ -4,7 +4,7 @@ from .user_withdraw_gift import withdraw_handler, gift_handler
 from .user_tasks import tasks_handler
 from .admin_main import (
     admin_cmd, admin_dashboard, admin_all_users, admin_withdrawals, admin_settings,
-    admin_broadcast, admin_gift_manager, admin_redeem_manager
+    admin_broadcast, admin_gift_manager, admin_redeem_manager, admin_reports, admin_fraud
 )
 from .admin_management import admin_manager
 from .admin_task_manager import admin_task_manager
@@ -797,6 +797,84 @@ def universal_handler(message):
             safe_send(message.chat.id, f"{pe('check')} Message sent to <code>{tid}</code>!")
         except Exception as e:
             safe_send(message.chat.id, f"{pe('cross')} Failed: {e}")
+        return
+
+    if state == "admin_add_user_note":
+        data = get_state_data(user_id)
+        tid = safe_int(data.get("target_id"))
+        if not tid:
+            safe_send(message.chat.id, f"{pe('cross')} Target user missing.")
+            clear_state(user_id)
+            return
+        add_user_note(tid, user_id, text.strip())
+        clear_state(user_id)
+        safe_send(message.chat.id, f"{pe('check')} Note added for <code>{tid}</code>.")
+        return
+
+    if state == "admin_add_user_warning":
+        data = get_state_data(user_id)
+        tid = safe_int(data.get("target_id"))
+        if not tid:
+            safe_send(message.chat.id, f"{pe('cross')} Target user missing.")
+            clear_state(user_id)
+            return
+        add_user_warning(tid, user_id, text.strip())
+        clear_state(user_id)
+        safe_send(message.chat.id, f"{pe('check')} Warning added for <code>{tid}</code>.")
+        return
+
+    if state == "admin_set_user_tier":
+        data = get_state_data(user_id)
+        tid = safe_int(data.get("target_id"))
+        try:
+            name, level = text.rsplit(' ', 1)
+            level = int(level)
+        except Exception:
+            safe_send(message.chat.id, f"{pe('cross')} Format: <code>Name Level</code>")
+            return
+        set_user_tier(tid, name.strip(), level, {}, user_id)
+        clear_state(user_id)
+        safe_send(message.chat.id, f"{pe('check')} Tier updated for <code>{tid}</code>.")
+        return
+
+    if state in ["admin_notes_lookup", "admin_warnings_lookup", "admin_tiers_lookup", "admin_activity_lookup"]:
+        try:
+            tid = int(text.strip())
+        except Exception:
+            safe_send(message.chat.id, f"{pe('cross')} Enter valid user ID.")
+            return
+        clear_state(user_id)
+        from .admin_withdrawals import show_user_info
+        show_user_info(message.chat.id, tid)
+        return
+
+
+    if state == "admin_user_search":
+        clear_state(user_id)
+        rows = search_users_admin(text.strip(), 20)
+        if not rows:
+            safe_send(message.chat.id, f"{pe('cross')} No users found.")
+            return
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        preview = f"{pe('premium_search')} <b>Search Results</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        for row in rows[:20]:
+            label = f"{row['first_name'] or 'User'} • @{row['username'] or 'none'} • {row['user_id']}"
+            markup.add(types.InlineKeyboardButton(label[:64], callback_data=f"uinfo|{row['user_id']}"))
+        preview += f"Found <b>{len(rows)}</b> matching users. Tap a user below."
+        safe_send(message.chat.id, preview, reply_markup=markup)
+        return
+
+    if state == "admin_announcement_edit":
+        clear_state(user_id)
+        if text.strip().lower() == 'off':
+            set_setting('announcement_text', '')
+            set_setting('announcement_enabled', False)
+            safe_send(message.chat.id, f"{pe('check')} Announcement cleared.")
+            return
+        set_setting('announcement_text', text.strip())
+        set_setting('announcement_enabled', True)
+        log_admin_action(user_id, 'announcement_edit', text.strip()[:120])
+        safe_send(message.chat.id, f"{pe('check')} Announcement updated and enabled.")
         return
 
     if state == "mine_enter_mines":
