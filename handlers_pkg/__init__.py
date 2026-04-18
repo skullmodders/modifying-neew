@@ -8,4 +8,3 @@ from . import admin_main  # noqa: F401
 from . import admin_management  # noqa: F401
 from . import admin_task_manager  # noqa: F401
 from . import db_manager  # noqa: F401
-from . import games  # noqa: F401

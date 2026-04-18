@@ -1,10 +1,10 @@
 from core import *
-from .basic_user import send_db, start_handler, balance_handler, refer_handler, back_user_panel
+from .basic_user import send_db, start_handler, balance_handler, refer_handler
 from .user_withdraw_gift import withdraw_handler, gift_handler
 from .user_tasks import tasks_handler
 from .admin_main import (
     admin_cmd, admin_dashboard, admin_all_users, admin_withdrawals, admin_settings,
-    admin_broadcast, admin_gift_manager, admin_redeem_manager, admin_reports, admin_fraud
+    admin_broadcast, admin_gift_manager, admin_redeem_manager
 )
 from .admin_management import admin_manager
 from .admin_task_manager import admin_task_manager
@@ -16,7 +16,6 @@ from .db_manager import (
 )
 from .admin_withdrawals import show_user_info
 from .admin_task_ops import process_task_rejection
-from .games import _show_games_home, mine_admin_entry, SOURCE_LABELS, SETTING_META_MAP
 
 # ======================== ADMIN PANEL BUTTON ========================
 @bot.message_handler(func=lambda m: m.text == "👑 Admin Panel" and is_admin(m.from_user.id))
@@ -61,7 +60,7 @@ def universal_handler(message):
         if text == "💰 Balance":
             balance_handler(message)
             return
-        if text in {"👥 Refer", "💸 Earn & Refer"}:
+        if text == "👥 Refer":
             refer_handler(message)
             return
         if text == "🏧 Withdraw":
@@ -72,15 +71,6 @@ def universal_handler(message):
             return
         if text == "📋 Tasks":
             tasks_handler(message)
-            return
-        if text == "🎮 Games":
-            if not bool(get_setting("games_section_enabled")):
-                safe_send(message.chat.id, "The games section is currently unavailable.")
-                return
-            if not check_force_join(user_id):
-                send_join_message(message.chat.id)
-                return
-            _show_games_home(message.chat.id, user_id)
             return
         if text == "👑 Admin Panel" and is_admin(user_id):
             open_admin_panel_btn(message)
@@ -105,9 +95,6 @@ def universal_handler(message):
             return
         if text == "🎟 Redeem Codes" and is_admin(user_id):
             admin_redeem_manager(message)
-            return
-        if text == "🎮 Game Control" and is_admin(user_id):
-            mine_admin_entry(message)
             return
         if text == "📋 Task Manager" and is_admin(user_id):
             admin_task_manager(message)
@@ -287,7 +274,7 @@ def universal_handler(message):
         amount = gift["amount"]
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         user = get_user(user_id)
-        update_user(user_id, balance=user["balance"] + amount, total_earned=user["total_earned"] + amount, gift_balance=float(user["gift_balance"] or 0) + amount)
+        update_user(user_id, balance=user["balance"] + amount, total_earned=user["total_earned"] + amount)
         db_execute("UPDATE gift_codes SET total_claims=total_claims+1, claimed_by=?, claimed_at=? WHERE code=?", (user_id, now, code))
         db_execute("INSERT INTO gift_claims (code, user_id, claimed_at) VALUES (?,?,?)", (code, user_id, now))
         if gift["total_claims"] + 1 >= gift["max_claims"]:
@@ -786,54 +773,43 @@ def universal_handler(message):
         safe_send(message.chat.id, f"{pe('check')} User <code>{tid}</code> reset!")
         return
 
-    if state == "admin_send_msg":
-        data = get_state_data(user_id)
-        tid = data.get("target_id")
-        clear_state(user_id)
-        if not tid:
-            return
-        try:
-            bot.send_message(tid, text, parse_mode="HTML")
-            safe_send(message.chat.id, f"{pe('check')} Message sent to <code>{tid}</code>!")
-        except Exception as e:
-            safe_send(message.chat.id, f"{pe('cross')} Failed: {e}")
-        return
 
     if state == "admin_add_user_note":
         data = get_state_data(user_id)
-        tid = safe_int(data.get("target_id"))
+        tid = int(data.get("target_id", 0) or 0)
+        clear_state(user_id)
         if not tid:
             safe_send(message.chat.id, f"{pe('cross')} Target user missing.")
-            clear_state(user_id)
             return
         add_user_note(tid, user_id, text.strip())
-        clear_state(user_id)
+        log_admin_action(user_id, 'user_note', f'{tid}')
         safe_send(message.chat.id, f"{pe('check')} Note added for <code>{tid}</code>.")
         return
 
     if state == "admin_add_user_warning":
         data = get_state_data(user_id)
-        tid = safe_int(data.get("target_id"))
+        tid = int(data.get("target_id", 0) or 0)
+        clear_state(user_id)
         if not tid:
             safe_send(message.chat.id, f"{pe('cross')} Target user missing.")
-            clear_state(user_id)
             return
         add_user_warning(tid, user_id, text.strip())
-        clear_state(user_id)
+        log_admin_action(user_id, 'user_warning', f'{tid}')
         safe_send(message.chat.id, f"{pe('check')} Warning added for <code>{tid}</code>.")
         return
 
     if state == "admin_set_user_tier":
         data = get_state_data(user_id)
-        tid = safe_int(data.get("target_id"))
+        tid = int(data.get("target_id", 0) or 0)
         try:
             name, level = text.rsplit(' ', 1)
             level = int(level)
         except Exception:
             safe_send(message.chat.id, f"{pe('cross')} Format: <code>Name Level</code>")
             return
-        set_user_tier(tid, name.strip(), level, {}, user_id)
         clear_state(user_id)
+        set_user_tier(tid, name.strip(), level, user_id)
+        log_admin_action(user_id, 'set_user_tier', f'{tid} => {name.strip()} {level}')
         safe_send(message.chat.id, f"{pe('check')} Tier updated for <code>{tid}</code>.")
         return
 
@@ -848,7 +824,6 @@ def universal_handler(message):
         show_user_info(message.chat.id, tid)
         return
 
-
     if state == "admin_user_search":
         clear_state(user_id)
         rows = search_users_admin(text.strip(), 20)
@@ -856,12 +831,10 @@ def universal_handler(message):
             safe_send(message.chat.id, f"{pe('cross')} No users found.")
             return
         markup = types.InlineKeyboardMarkup(row_width=1)
-        preview = f"{pe('premium_search')} <b>Search Results</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
         for row in rows[:20]:
             label = f"{row['first_name'] or 'User'} • @{row['username'] or 'none'} • {row['user_id']}"
             markup.add(types.InlineKeyboardButton(label[:64], callback_data=f"uinfo|{row['user_id']}"))
-        preview += f"Found <b>{len(rows)}</b> matching users. Tap a user below."
-        safe_send(message.chat.id, preview, reply_markup=markup)
+        safe_send(message.chat.id, f"{pe('search')} Found <b>{len(rows)}</b> matching users. Tap below.", reply_markup=markup)
         return
 
     if state == "admin_announcement_edit":
@@ -873,119 +846,19 @@ def universal_handler(message):
             return
         set_setting('announcement_text', text.strip())
         set_setting('announcement_enabled', True)
-        log_admin_action(user_id, 'announcement_edit', text.strip()[:120])
-        safe_send(message.chat.id, f"{pe('check')} Announcement updated and enabled.")
+        safe_send(message.chat.id, f"{pe('check')} Announcement updated.")
         return
-
-    if state == "mine_enter_mines":
-        try:
-            mines = int(text.strip())
-        except Exception:
-            safe_send(message.chat.id, f"{pe('cross')} Enter a valid mine count.")
-            return
-        min_mines = safe_int(get_setting("mine_min_mines"), 1)
-        max_mines = safe_int(get_setting("mine_max_mines"), max(1, safe_int(get_setting("mine_grid_size"), 5) ** 2 - 1))
-        if mines < min_mines or mines > max_mines:
-            safe_send(message.chat.id, f"{pe('cross')} Mine count must be between {min_mines} and {max_mines}.")
-            return
-        set_state(user_id, "mine_enter_bet", {"mines_count": mines})
-        safe_send(message.chat.id, f"{pe('money')} Enter bet amount between ₹{get_setting('mine_min_bet')} and ₹{get_setting('mine_max_bet')}.")
-        return
-
-    if state == "mine_enter_bet":
-        try:
-            bet = float(text.strip())
-        except Exception:
-            safe_send(message.chat.id, f"{pe('cross')} Enter a valid bet amount.")
-            return
-        min_bet = safe_float(get_setting("mine_min_bet"), 1)
-        max_bet = safe_float(get_setting("mine_max_bet"), 500)
-        if bet < min_bet or bet > max_bet:
-            safe_send(message.chat.id, f"{pe('cross')} Bet must be between ₹{min_bet:.2f} and ₹{max_bet:.2f}.")
-            return
+    if state == "admin_send_msg":
         data = get_state_data(user_id)
-        data["bet_amount"] = round(bet, 2)
-        set_state(user_id, "mine_choose_source", data)
-        user = get_user(user_id)
-        wallets = get_wallet_breakdown(user)
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        for source in ["main", "referral", "daily_bonus", "gift"]:
-            markup.add(types.InlineKeyboardButton(f"{SOURCE_LABELS[source]} • ₹{wallets[source]:.2f}", callback_data=f"mine_source|{source}"))
-        safe_send(message.chat.id, f"{pe('wallet')} Choose balance source for ₹{bet:.2f} bet.", reply_markup=markup)
-        return
-
-    if state.startswith("mine_admin_setting|"):
-        key = state.split("|", 1)[1]
-        meta = SETTING_META_MAP.get(key)
-        if not meta:
-            clear_state(user_id)
-            return
-        raw = text.strip()
-        if meta["type"] == "user_list":
-            if raw.lower() in {"empty", "none", "clear"}:
-                value = []
-            else:
-                try:
-                    value = [int(x.strip()) for x in raw.replace(" ", "").split(",") if x.strip()]
-                except Exception:
-                    safe_send(message.chat.id, f"{pe('cross')} Send comma-separated user IDs or <code>empty</code>.")
-                    return
-        elif meta["type"] == "int":
-            try:
-                value = int(raw)
-            except Exception:
-                safe_send(message.chat.id, f"{pe('cross')} Enter a valid integer.")
-                return
-        elif meta["type"] == "text":
-            value = raw or "/mine"
-            if key == "mine_web_path":
-                if not value.startswith("/"):
-                    value = "/" + value
-                value = value.replace(" ", "")
-        else:
-            try:
-                value = float(raw)
-            except Exception:
-                safe_send(message.chat.id, f"{pe('cross')} Enter a valid number.")
-                return
-
-        if key == "mine_grid_size":
-            value = max(3, min(10, int(value)))
-            max_tiles = value * value - 1
-            current_min = max(1, min(safe_int(get_setting("mine_min_mines"), 1), max_tiles))
-            current_max = max(current_min, min(safe_int(get_setting("mine_max_mines"), max_tiles), max_tiles))
-            set_setting("mine_min_mines", current_min)
-            set_setting("mine_max_mines", current_max)
-        elif key == "mine_min_mines":
-            grid = max(3, min(10, safe_int(get_setting("mine_grid_size"), 5)))
-            value = max(1, min(int(value), grid * grid - 1))
-            if value > safe_int(get_setting("mine_max_mines"), grid * grid - 1):
-                set_setting("mine_max_mines", value)
-        elif key == "mine_max_mines":
-            grid = max(3, min(10, safe_int(get_setting("mine_grid_size"), 5)))
-            value = max(1, min(int(value), grid * grid - 1))
-            if value < safe_int(get_setting("mine_min_mines"), 1):
-                set_setting("mine_min_mines", value)
-        elif key == "mine_min_bet":
-            value = max(0.0, float(value))
-            if value > safe_float(get_setting("mine_max_bet"), value):
-                set_setting("mine_max_bet", value)
-        elif key == "mine_max_bet":
-            value = max(0.0, float(value))
-            if value < safe_float(get_setting("mine_min_bet"), value):
-                set_setting("mine_min_bet", value)
-        elif key == "games_access_min_referrals":
-            value = max(0, int(value))
-        elif key == "mine_global_win_rate":
-            value = max(0.0, min(100.0, float(value)))
-            set_setting("mine_global_loss_rate", round(100.0 - value, 2))
-        elif key == "mine_global_loss_rate":
-            value = max(0.0, min(100.0, float(value)))
-            set_setting("mine_global_win_rate", round(100.0 - value, 2))
-
+        tid = data.get("target_id")
         clear_state(user_id)
-        set_setting(key, value)
-        safe_send(message.chat.id, f"{pe('check')} {meta['label']} updated to <code>{h(value)}</code>")
+        if not tid:
+            return
+        try:
+            bot.send_message(tid, text, parse_mode="HTML")
+            safe_send(message.chat.id, f"{pe('check')} Message sent to <code>{tid}</code>!")
+        except Exception as e:
+            safe_send(message.chat.id, f"{pe('cross')} Failed: {e}")
         return
 
     # ======= ADMIN TASK STATES =======

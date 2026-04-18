@@ -8,7 +8,7 @@ def admin_cmd(message):
         return
     safe_send(
         message.chat.id,
-        f"{pe('crown')} <b>Admin Panel</b> {pe('premium_settings')}\n"
+        f"{pe('crown')} <b>Admin Panel</b> {pe('gear')}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"Welcome, Admin! Use the keyboard below.",
         reply_markup=get_admin_keyboard()
@@ -221,14 +221,6 @@ def admin_all_users(message):
     markup.add(
         types.InlineKeyboardButton("🏆 Top Task Earners", callback_data="top_task_earners"),
         types.InlineKeyboardButton("🔍 Search by Name", callback_data="search_by_name"),
-    )
-    markup.add(
-        types.InlineKeyboardButton("📝 User Notes", callback_data="admin_user_notes_panel"),
-        types.InlineKeyboardButton("⚠️ User Warnings", callback_data="admin_user_warnings_panel"),
-    )
-    markup.add(
-        types.InlineKeyboardButton("🏷 User Tiers", callback_data="admin_user_tiers_panel"),
-        types.InlineKeyboardButton("🕒 Activity Logs", callback_data="admin_activity_panel"),
     )
     markup.add(
         types.InlineKeyboardButton("📊 User Statistics", callback_data="user_statistics"),
@@ -1366,23 +1358,79 @@ def noop_manual_verify(call):
     safe_answer(call, "Manual verify button remains available.")
 
 
+@bot.message_handler(func=lambda m: m.text == "✨ Control Center" and is_admin(m.from_user.id))
+def admin_control_center(message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(types.InlineKeyboardButton("📊 Dashboard", callback_data="dash_refresh"), types.InlineKeyboardButton("🧩 Feature Toggles", callback_data="ft_show"))
+    markup.add(types.InlineKeyboardButton("⚙️ Settings", callback_data="cc_settings"), types.InlineKeyboardButton("📈 Reports", callback_data="reports_show"))
+    markup.add(types.InlineKeyboardButton("🧾 Audit Logs", callback_data="audit_show"), types.InlineKeyboardButton("📣 Announcements", callback_data="ann_show"))
+    markup.add(types.InlineKeyboardButton("🗃 Backups", callback_data="backup_show"), types.InlineKeyboardButton("🔎 User Search", callback_data="dash_user_lookup"))
+    safe_send(message.chat.id, f"{pe('star')} <b>Control Center</b> {pe('gear')}\n━━━━━━━━━━━━━━━━━━━━━━\n\nQuick access to the most important admin tools.", reply_markup=markup)
+
+@bot.message_handler(func=lambda m: m.text == "🧰 User Tools" and is_admin(m.from_user.id))
+def admin_user_tools(message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(types.InlineKeyboardButton("🔍 Find User", callback_data="dash_user_lookup"), types.InlineKeyboardButton("🔎 Search by Name", callback_data="search_by_name"))
+    markup.add(types.InlineKeyboardButton("📝 Notes Panel", callback_data="admin_user_notes_panel"), types.InlineKeyboardButton("⚠️ Warnings Panel", callback_data="admin_user_warnings_panel"))
+    markup.add(types.InlineKeyboardButton("🏷 Tiers Panel", callback_data="admin_user_tiers_panel"), types.InlineKeyboardButton("🕒 Activity Panel", callback_data="admin_activity_panel"))
+    safe_send(message.chat.id, f"{pe('crown')} <b>User Tools</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\nOpen notes, warnings, tiers, and activity tools from one panel.", reply_markup=markup)
+
+@bot.message_handler(func=lambda m: m.text == "🔎 User Search" and is_admin(m.from_user.id))
+def admin_user_search_entry(message):
+    set_state(message.from_user.id, "admin_user_search")
+    safe_send(message.chat.id, f"{pe('search')} Send user id, username, name, or UPI id to search.")
+
+@bot.message_handler(func=lambda m: m.text == "🧩 Feature Toggles" and is_admin(m.from_user.id))
+def admin_feature_toggles(message):
+    show_feature_toggles_panel(message.chat.id)
+
 @bot.message_handler(func=lambda m: m.text == "📈 Reports" and is_admin(m.from_user.id))
 def admin_reports(message):
-    if not admin_has_permission(message.from_user.id, "reports") and not admin_has_permission(message.from_user.id, "finance"):
-        safe_send(message.chat.id, f"{pe('no_entry')} Permission denied.")
-        return
     show_reports_panel(message.chat.id)
 
-@bot.message_handler(func=lambda m: m.text == "🛡 Fraud Control" and is_admin(m.from_user.id))
-def admin_fraud(message):
-    show_fraud_panel(message.chat.id)
+@bot.message_handler(func=lambda m: m.text == "🧾 Audit Logs" and is_admin(m.from_user.id))
+def admin_audit_logs(message):
+    show_audit_logs_panel(message.chat.id)
+
+@bot.message_handler(func=lambda m: m.text == "📣 Announcements" and is_admin(m.from_user.id))
+def admin_announcements(message):
+    show_announcement_panel(message.chat.id)
+
+@bot.message_handler(func=lambda m: m.text == "🗃 Backups" and is_admin(m.from_user.id))
+def admin_backups(message):
+    show_backups_panel(message.chat.id)
+
+@bot.callback_query_handler(func=lambda call: call.data in ["ft_show","cc_settings","reports_show","audit_show","ann_show","backup_show"])
+def extra_admin_router(call):
+    if not is_admin(call.from_user.id):
+        return
+    safe_answer(call)
+    if call.data == 'ft_show':
+        return show_feature_toggles_panel(call.message.chat.id)
+    if call.data == 'cc_settings':
+        return show_settings(call.message.chat.id)
+    if call.data == 'reports_show':
+        return show_reports_panel(call.message.chat.id)
+    if call.data == 'audit_show':
+        return show_audit_logs_panel(call.message.chat.id)
+    if call.data == 'ann_show':
+        return show_announcement_panel(call.message.chat.id)
+    if call.data == 'backup_show':
+        return show_backups_panel(call.message.chat.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "search_by_name")
+def search_by_name(call):
+    if not is_admin(call.from_user.id): return
+    safe_answer(call)
+    set_state(call.from_user.id, "admin_user_search")
+    safe_send(call.message.chat.id, f"{pe('search')} Enter name, username, or UPI id:")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_user_notes_panel")
 def admin_user_notes_panel(call):
     if not is_admin(call.from_user.id): return
     safe_answer(call)
     set_state(call.from_user.id, "admin_notes_lookup")
-    safe_send(call.message.chat.id, f"{pe('pencil')} Enter user ID to open notes panel:")
+    safe_send(call.message.chat.id, f"{pe('bookmark')} Enter user ID to open notes panel:")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_user_warnings_panel")
 def admin_user_warnings_panel(call):
@@ -1396,145 +1444,28 @@ def admin_user_tiers_panel(call):
     if not is_admin(call.from_user.id): return
     safe_answer(call)
     set_state(call.from_user.id, "admin_tiers_lookup")
-    safe_send(call.message.chat.id, f"{pe('tag')} Enter user ID to open tier panel:")
+    safe_send(call.message.chat.id, f"{pe('bookmark')} Enter user ID to open tier panel:")
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_activity_panel")
 def admin_activity_panel(call):
     if not is_admin(call.from_user.id): return
     safe_answer(call)
     set_state(call.from_user.id, "admin_activity_lookup")
-    safe_send(call.message.chat.id, f"{pe('list')} Enter user ID to view activity:")
-
-def show_reports_panel(chat_id):
-    total_bal = db_execute("SELECT SUM(balance) as t FROM users", fetchone=True)
-    total_bonus = db_execute("SELECT SUM(bonus_balance + referral_balance + daily_bonus_balance + gift_balance) as t FROM users", fetchone=True)
-    wd = db_execute("SELECT COUNT(*) as c, SUM(amount) as s FROM withdrawals WHERE status='approved'", fetchone=True)
-    pending = db_execute("SELECT COUNT(*) as c, SUM(amount) as s FROM withdrawals WHERE status='pending'", fetchone=True)
-    games = db_execute("SELECT COUNT(*) as c, SUM(bet_amount) as wagered, SUM(net_payout) as payout FROM mine_game_history", fetchone=True)
-    audit = get_financial_audit_logs(10)
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(types.InlineKeyboardButton("🧾 Financial Audit Logs", callback_data="reports_audit"), types.InlineKeyboardButton("📣 Referral Analytics", callback_data="reports_referral"))
-    markup.add(types.InlineKeyboardButton("🛡 Fraud Control", callback_data="reports_fraud"), types.InlineKeyboardButton("📊 Refresh", callback_data="reports_refresh"))
-    text = (
-        f"{pe('premium_bolt')} <b>Advanced Reports</b> {pe('premium_money')}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Total user balance: ₹{safe_float(total_bal['t'] if total_bal else 0):.2f}\n"
-        f"Stored bonus-type balance: ₹{safe_float(total_bonus['t'] if total_bonus else 0):.2f}\n"
-        f"Approved withdrawals: {safe_int(wd['c'] if wd else 0)} (₹{safe_float(wd['s'] if wd else 0):.2f})\n"
-        f"Pending withdrawals: {safe_int(pending['c'] if pending else 0)} (₹{safe_float(pending['s'] if pending else 0):.2f})\n"
-        f"Mine wagers: ₹{safe_float(games['wagered'] if games else 0):.2f}\n"
-        f"Mine payouts: ₹{safe_float(games['payout'] if games else 0):.2f}\n"
-        f"Mine gross: ₹{safe_float((games['wagered'] if games else 0) - (games['payout'] if games else 0)):.2f}\n\n"
-        f"Last audit entries: <b>{len(audit)}</b>"
-    )
-    safe_send(chat_id, text, reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data in ["reports_refresh","reports_audit","reports_referral","reports_fraud"])
-def reports_router(call):
-    if not is_admin(call.from_user.id): return
-    if call.data == 'reports_refresh':
-        safe_answer(call)
-        return show_reports_panel(call.message.chat.id)
-    if call.data == 'reports_audit':
-        safe_answer(call)
-        rows = get_financial_audit_logs(30)
-        text = f"{pe('list')} <b>Financial Audit Logs</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        for r in rows:
-            text += f"• {r['created_at']} | {r['entry_type']} | user <code>{r['user_id']}</code> | ₹{safe_float(r['amount']):.2f} | {h(r['details'])}\n"
-        return safe_send(call.message.chat.id, text[:4000] if rows else f"{pe('info')} No audit logs yet.")
-    if call.data == 'reports_referral':
-        safe_answer(call)
-        today = datetime.now().strftime('%Y-%m-%d')
-        top = db_execute("SELECT user_id, first_name, referral_count, total_referral_earnings FROM users ORDER BY referral_count DESC, total_referral_earnings DESC LIMIT 10", fetch=True) or []
-        new_today = db_execute("SELECT COUNT(*) as c FROM users WHERE joined_at LIKE ? AND referred_by!=0", (f"{today}%",), fetchone=True)
-        text = f"{pe('people')} <b>Referral Analytics</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\nNew referred joins today: {safe_int(new_today['c'] if new_today else 0)}\n\nTop Referrers:\n"
-        for i,row in enumerate(top,1):
-            text += f"{i}. {h(row['first_name'])} • refs {row['referral_count']} • earned ₹{safe_float(row['total_referral_earnings']):.2f}\n"
-        return safe_send(call.message.chat.id, text)
-    if call.data == 'reports_fraud':
-        safe_answer(call)
-        return show_fraud_panel(call.message.chat.id)
-
-def show_fraud_panel(chat_id):
-    logs = get_referral_fraud_logs(20)
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(types.InlineKeyboardButton("🔎 Run Referral Fraud Scan", callback_data="fraud_scan_referrals"), types.InlineKeyboardButton("📜 View Fraud Logs", callback_data="fraud_view_logs"))
-    markup.add(types.InlineKeyboardButton(f"{'🟢' if bool(get_setting('referral_fraud_detection_enabled')) else '🔴'} Toggle Detection", callback_data="fraud_toggle"))
-    text = (
-        f"{pe('shield')} <b>Fraud Control</b> {pe('premium_search')}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"Detection: <b>{'ON' if bool(get_setting('referral_fraud_detection_enabled')) else 'OFF'}</b>\n"
-        f"Same-IP trigger: <b>{get_setting('referral_fraud_min_same_ip')}</b> accounts\n"
-        f"Last flagged logs: <b>{len(logs)}</b>"
-    )
-    safe_send(chat_id, text, reply_markup=markup)
-@bot.callback_query_handler(func=lambda call: call.data in ["fraud_scan_referrals","fraud_view_logs","fraud_toggle"])
-def fraud_actions(call):
-    if not is_admin(call.from_user.id): return
-    if call.data == 'fraud_toggle':
-        cur = bool(get_setting('referral_fraud_detection_enabled'))
-        set_setting('referral_fraud_detection_enabled', not cur)
-        safe_answer(call, 'Updated')
-        return show_fraud_panel(call.message.chat.id)
-    if call.data == 'fraud_scan_referrals':
-        safe_answer(call, 'Scanning...')
-        findings = scan_referral_fraud(300)
-        return safe_send(call.message.chat.id, f"{pe('check')} Fraud scan complete. Same-IP clusters found: <b>{len(findings)}</b>")
-    if call.data == 'fraud_view_logs':
-        safe_answer(call)
-        rows = get_referral_fraud_logs(40)
-        text = f"{pe('warning')} <b>Fraud Logs</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        for r in rows:
-            text += f"• {r['created_at']} | owner <code>{r['user_id']}</code> | suspect <code>{r['suspicious_user_id']}</code> | {h(r['reason'])} | score {r['score']}\n"
-        return safe_send(call.message.chat.id, text[:4000] if rows else f"{pe('info')} No fraud logs yet.")
-
-
-@bot.message_handler(func=lambda m: m.text == "🧩 Feature Toggles" and is_admin(m.from_user.id))
-def admin_feature_toggles(message):
-    if not admin_has_permission(message.from_user.id, "settings"):
-        return safe_send(message.chat.id, f"{pe('no_entry')} Permission denied.")
-    show_feature_toggles_panel(message.chat.id)
-
-@bot.message_handler(func=lambda m: m.text == "🔎 User Search" and is_admin(m.from_user.id))
-def admin_user_search_entry(message):
-    set_state(message.from_user.id, "admin_user_search")
-    safe_send(message.chat.id, f"{pe('premium_search')} <b>User Search</b>\n\nSend user id, username, name, or UPI id.")
-
-@bot.message_handler(func=lambda m: m.text == "🧾 Audit Logs" and is_admin(m.from_user.id))
-def admin_audit_logs(message):
-    if not admin_has_permission(message.from_user.id, "audit") and not admin_has_permission(message.from_user.id, "finance"):
-        return safe_send(message.chat.id, f"{pe('no_entry')} Permission denied.")
-    show_audit_logs_panel(message.chat.id)
-
-@bot.message_handler(func=lambda m: m.text == "🗃 Backups" and is_admin(m.from_user.id))
-def admin_backups(message):
-    if not is_super_admin(message.from_user.id):
-        return safe_send(message.chat.id, f"{pe('no_entry')} Only main admin can manage backups.")
-    show_backups_panel(message.chat.id)
-
-@bot.message_handler(func=lambda m: m.text == "📣 Announcements" and is_admin(m.from_user.id))
-def admin_announcements(message):
-    if not admin_has_permission(message.from_user.id, "broadcast"):
-        return safe_send(message.chat.id, f"{pe('no_entry')} Permission denied.")
-    show_announcement_panel(message.chat.id)
-
+    safe_send(call.message.chat.id, f"{pe('calendar')} Enter user ID to view activity:")
 
 def show_feature_toggles_panel(chat_id):
     keys = [
-        ("games_section_enabled", "🎮 Games"),
-        ("tasks_enabled", "📋 Tasks"),
-        ("withdraw_enabled", "💳 Withdrawals"),
-        ("gift_enabled", "🎁 Gifts"),
-        ("refer_enabled", "💸 Refer & Earn"),
-        ("daily_bonus_enabled", "🎁 Daily Bonus"),
-        ("mine_game_enabled", "💎 Mine Game"),
-        ("bot_maintenance", "🛠 Maintenance"),
+        ('feature_withdrawals_enabled', '💳 Withdrawals'),
+        ('feature_referral_enabled', '👥 Referral'),
+        ('feature_gifts_enabled', '🎁 Gifts'),
+        ('feature_tasks_enabled', '📋 Tasks'),
+        ('feature_broadcast_enabled', '📢 Broadcast'),
     ]
     markup = types.InlineKeyboardMarkup(row_width=2)
     for key, label in keys:
         state = bool(get_setting(key))
         markup.add(types.InlineKeyboardButton(f"{'🟢' if state else '🔴'} {label}", callback_data=f"ftog|{key}"))
-    safe_send(chat_id, f"{pe('premium_settings')} <b>Feature Toggles</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\nQuickly enable or disable major bot sections.", reply_markup=markup)
+    safe_send(chat_id, f"{pe('gear')} <b>Feature Toggles</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\nEnable or disable major bot sections quickly.", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ftog|"))
 def feature_toggle_cb(call):
@@ -1546,79 +1477,31 @@ def feature_toggle_cb(call):
     safe_answer(call, 'Updated')
     show_feature_toggles_panel(call.message.chat.id)
 
+def show_reports_panel(chat_id):
+    total_bal = db_execute("SELECT SUM(balance) as t FROM users", fetchone=True) or {'t': 0}
+    bonus_hist = db_execute("SELECT COUNT(*) as c, SUM(amount) as s FROM bonus_history", fetchone=True) or {'c': 0, 's': 0}
+    wd = db_execute("SELECT COUNT(*) as c, SUM(amount) as s FROM withdrawals WHERE status='approved'", fetchone=True) or {'c': 0, 's': 0}
+    pending = db_execute("SELECT COUNT(*) as c, SUM(amount) as s FROM withdrawals WHERE status='pending'", fetchone=True) or {'c': 0, 's': 0}
+    safe_send(chat_id, f"{pe('chart_up')} <b>Reports</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\nTotal main balance: ₹{total_bal['t'] or 0:.2f}\nBonuses paid: {bonus_hist['c']} (₹{bonus_hist['s'] or 0:.2f})\nApproved withdrawals: {wd['c']} (₹{wd['s'] or 0:.2f})\nPending withdrawals: {pending['c']} (₹{pending['s'] or 0:.2f})")
 
 def show_audit_logs_panel(chat_id):
-    audit = get_financial_audit_logs(20)
-    errors = get_system_error_logs(20)
-    text = (
-        f"{pe('premium_folder')} <b>Audit & Error Logs</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{pe('premium_money')} Financial audit entries: <b>{len(audit)}</b>\n"
-        f"{pe('warning')} System errors tracked: <b>{len(errors)}</b>\n\n"
-    )
-    if audit:
-        text += f"{pe('premium_label')} <b>Recent financial audit</b>\n"
-        for row in audit[:8]:
-            text += f"• {row['created_at']} | {h(row['entry_type'])} | ₹{safe_float(row['amount']):.2f} | user <code>{row['user_id']}</code>\n"
+    audit = get_admin_logs(15)
+    errors = get_system_error_logs(10)
+    text = f"{pe('bookmark')} <b>Audit Logs</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    for row in audit[:10]:
+        text += f"• {row['created_at']} | {h(row['action'])} | {h(row['details'])[:60]}\n"
     if errors:
-        text += f"\n{pe('premium_stop')} <b>Recent errors</b>\n"
-        for row in errors[:6]:
-            text += f"• {row['created_at']} | {h(row['module'])} | {h(row['error_text'])[:80]}\n"
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(types.InlineKeyboardButton("🔄 Refresh", callback_data="audit_refresh"), types.InlineKeyboardButton("🧹 Clear Error Logs", callback_data="audit_clear_errors"))
-    safe_send(chat_id, text[:4000], reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data in ["audit_refresh","audit_clear_errors"])
-
-def audit_panel_actions(call):
-    if not is_admin(call.from_user.id): return
-    if call.data == 'audit_clear_errors':
-        if not is_super_admin(call.from_user.id):
-            return safe_answer(call, 'Only main admin', True)
-        db_execute('DELETE FROM system_error_logs')
-        log_admin_action(call.from_user.id, 'clear_error_logs', 'system_error_logs')
-        safe_answer(call, 'Error logs cleared')
-    else:
-        safe_answer(call)
-    show_audit_logs_panel(call.message.chat.id)
-
-
-def show_backups_panel(chat_id):
-    rows = get_platform_backups(10)
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(types.InlineKeyboardButton("➕ Create Backup", callback_data="backup_create"), types.InlineKeyboardButton("🔄 Refresh", callback_data="backup_refresh"))
-    text = f"{pe('premium_folder')} <b>Database Backups</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\nStored backups: <b>{len(rows)}</b>\n"
-    for row in rows[:8]:
-        text += f"• {h(row['backup_name'])}\n  {row['created_at']}\n"
-    safe_send(chat_id, text, reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data in ["backup_create","backup_refresh"])
-def backup_panel_actions(call):
-    if not is_super_admin(call.from_user.id):
-        return safe_answer(call, 'Only main admin', True)
-    if call.data == 'backup_create':
-        safe_answer(call, 'Creating backup...')
-        path = create_platform_backup(call.from_user.id)
-        if path and os.path.exists(path):
-            try:
-                with open(path, 'rb') as f:
-                    bot.send_document(call.message.chat.id, f, caption=f"{pe('check')} Backup created")
-            except Exception as e:
-                log_system_error('backup_send', e, path, call.from_user.id)
-        else:
-            safe_send(call.message.chat.id, f"{pe('cross')} Backup failed.")
-    else:
-        safe_answer(call)
-    show_backups_panel(call.message.chat.id)
-
+        text += "\n<b>Recent Errors</b>\n"
+        for row in errors[:5]:
+            text += f"• {row['created_at']} | {h(row['module'])} | {h(row['error_text'])[:70]}\n"
+    safe_send(chat_id, text[:4000])
 
 def show_announcement_panel(chat_id):
     enabled = bool(get_setting('announcement_enabled'))
-    text = str(get_setting('announcement_text') or '')
+    ann_text = str(get_setting('announcement_text') or '')
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(types.InlineKeyboardButton(f"{'🟢' if enabled else '🔴'} Toggle", callback_data="ann_toggle"), types.InlineKeyboardButton("✏️ Edit Text", callback_data="ann_edit"))
-    body = f"{pe('premium_news')} <b>Announcement Manager</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\nStatus: <b>{'ON' if enabled else 'OFF'}</b>\nCurrent text:\n{h(text) or '<i>No announcement set.</i>'}"
-    safe_send(chat_id, body, reply_markup=markup)
+    safe_send(chat_id, f"{pe('megaphone')} <b>Announcement Manager</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\nStatus: <b>{'ON' if enabled else 'OFF'}</b>\nCurrent text:\n{h(ann_text) or '<i>No announcement set.</i>'}", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data in ["ann_toggle","ann_edit"])
 def announcement_actions(call):
@@ -1626,10 +1509,33 @@ def announcement_actions(call):
     if call.data == 'ann_toggle':
         cur = bool(get_setting('announcement_enabled'))
         set_setting('announcement_enabled', not cur)
-        log_admin_action(call.from_user.id, 'announcement_toggle', f'{not cur}')
         safe_answer(call, 'Updated')
         return show_announcement_panel(call.message.chat.id)
     safe_answer(call)
     set_state(call.from_user.id, 'admin_announcement_edit')
     safe_send(call.message.chat.id, f"{pe('pencil')} Send new announcement text. Send <code>off</code> to clear it.")
 
+def show_backups_panel(chat_id):
+    rows = get_platform_backups(8)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(types.InlineKeyboardButton("➕ Create Backup", callback_data="backup_create"), types.InlineKeyboardButton("🔄 Refresh", callback_data="backup_refresh"))
+    text = f"{pe('bookmark')} <b>Backups</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\nStored backups: <b>{len(rows)}</b>\n"
+    for row in rows:
+        text += f"• {h(row['backup_name'])} | {row['created_at']}\n"
+    safe_send(chat_id, text, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data in ["backup_create","backup_refresh"])
+def backup_actions(call):
+    if not is_super_admin(call.from_user.id):
+        return safe_answer(call, 'Only main admin', True)
+    if call.data == 'backup_create':
+        safe_answer(call, 'Creating backup...')
+        path = create_platform_backup(call.from_user.id)
+        if path and os.path.exists(path):
+            with open(path, 'rb') as f:
+                bot.send_document(call.message.chat.id, f, caption=f"{pe('check')} Backup created")
+        else:
+            safe_send(call.message.chat.id, f"{pe('cross')} Backup failed.")
+    else:
+        safe_answer(call)
+    show_backups_panel(call.message.chat.id)

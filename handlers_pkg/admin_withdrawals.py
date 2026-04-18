@@ -190,10 +190,6 @@ def show_user_info(chat_id, target_id):
     wd_all = db_execute("SELECT COUNT(*) as cnt FROM withdrawals WHERE user_id=?", (target_id,), fetchone=True)
     wd_ok = db_execute("SELECT COUNT(*) as cnt FROM withdrawals WHERE user_id=? AND status='approved'", (target_id,), fetchone=True)
     task_done = db_execute("SELECT COUNT(*) as cnt FROM task_completions WHERE user_id=?", (target_id,), fetchone=True)
-    notes = get_user_notes(target_id, 3)
-    warns = get_user_warnings(target_id, 5)
-    tier = get_user_tier(target_id)
-    activity = get_user_activity(target_id, 5)
     status = "🔴 Banned" if user["banned"] else "🟢 Active"
     is_adm = "👑 Yes" if is_admin(target_id) else "No"
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -210,10 +206,6 @@ def show_user_info(chat_id, target_id):
         types.InlineKeyboardButton("✏️ Edit User DB", callback_data=f"db_edit_u|{target_id}"),
     )
     markup.add(
-        types.InlineKeyboardButton("👑 Make Admin", callback_data=f"make_admin|{target_id}"),
-        types.InlineKeyboardButton("🗑 Delete User", callback_data=f"del_user|{target_id}"),
-    )
-    markup.add(
         types.InlineKeyboardButton("📝 Add Note", callback_data=f"usr_note|{target_id}"),
         types.InlineKeyboardButton("⚠️ Warn User", callback_data=f"usr_warn|{target_id}"),
     )
@@ -221,37 +213,31 @@ def show_user_info(chat_id, target_id):
         types.InlineKeyboardButton("🏷 Set Tier", callback_data=f"usr_tier|{target_id}"),
         types.InlineKeyboardButton("📜 Activity", callback_data=f"usr_activity|{target_id}"),
     )
-    last_note = notes[0]['note'] if notes else 'None'
-    last_warn = warns[0]['reason'] if warns else 'None'
-    card_text = (
-        f"{pe('premium_user')} <b>User Control Card</b> {pe('premium_star')}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"{pe('disguise')} <b>Name:</b> {h(user['first_name'])}\n"
-        f"{pe('link')} <b>Username:</b> @{h(user['username'] or 'None')}\n"
-        f"{pe('info')} <b>ID:</b> <code>{target_id}</code>\n"
-        f"{pe('premium_eye')} <b>Status:</b> {status}\n"
-        f"{pe('crown')} <b>Admin:</b> {is_adm}\n"
-        f"{pe('premium_tag')} <b>Tier:</b> {h(tier['tier_name'])} Lv.{safe_int(tier['tier_level'])}\n"
-        f"{pe('shield')} <b>IP Verified:</b> {'Yes' if safe_int(user.get('ip_verified', 0)) else 'No'}\n"
-        f"{pe('premium_search')} <b>IP Address:</b> {h(user.get('ip_address') or 'Unknown')}\n\n"
-        f"{pe('fly_money')} <b>Main Balance:</b> ₹{safe_float(user['balance']):.2f}\n"
-        f"{pe('coins')} <b>Referral Balance:</b> ₹{safe_float(user.get('referral_balance', 0)):.2f}\n"
-        f"{pe('party')} <b>Daily Bonus Balance:</b> ₹{safe_float(user.get('daily_bonus_balance', 0)):.2f}\n"
-        f"{pe('premium_gem')} <b>Gift Balance:</b> ₹{safe_float(user.get('gift_balance', 0)):.2f}\n"
-        f"{pe('chart_up')} <b>Total Earned:</b> ₹{safe_float(user['total_earned']):.2f}\n"
-        f"{pe('check')} <b>Withdrawn:</b> ₹{safe_float(user['total_withdrawn']):.2f}\n"
-        f"{pe('thumbs_up')} <b>Referrals:</b> {safe_int(user['referral_count'])}\n"
-        f"{pe('arrow')} <b>Referred by:</b> {user['referred_by'] or 'None'}\n"
-        f"{pe('link')} <b>UPI:</b> {h(user['upi_id'] or 'Not set')}\n\n"
-        f"{pe('task')} <b>Tasks Done:</b> {task_done['cnt'] if task_done else 0}\n"
-        f"{pe('calendar')} <b>Joined:</b> {h(user['joined_at'])}\n"
-        f"{pe('premium_clock')} <b>Last Active:</b> {h(user.get('last_active_at') or 'Unknown')}\n"
-        f"{pe('chart')} <b>Withdrawals:</b> {wd_all['cnt']} ({wd_ok['cnt']} approved)\n"
-        f"{pe('premium_chat')} <b>Latest Note:</b> {h(last_note)[:80]}\n"
-        f"{pe('warning')} <b>Latest Warning:</b> {h(last_warn)[:80]}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━"
+    markup.add(
+        types.InlineKeyboardButton("👑 Make Admin", callback_data=f"make_admin|{target_id}"),
+        types.InlineKeyboardButton("🗑 Delete User", callback_data=f"del_user|{target_id}"),
     )
-    safe_send(chat_id, card_text, reply_markup=markup)
+    safe_send(
+        chat_id,
+        f"{pe('info')} <b>User Info</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{pe('disguise')} <b>Name:</b> {user['first_name']}\n"
+        f"{pe('link')} <b>Username:</b> @{user['username'] or 'None'}\n"
+        f"{pe('info')} <b>ID:</b> <code>{target_id}</code>\n"
+        f"<b>Status:</b> {status}\n"
+        f"<b>Admin:</b> {is_adm}\n\n"
+        f"{pe('fly_money')} <b>Balance:</b> ₹{user['balance']:.2f}\n"
+        f"{pe('chart_up')} <b>Total Earned:</b> ₹{user['total_earned']:.2f}\n"
+        f"{pe('check')} <b>Withdrawn:</b> ₹{user['total_withdrawn']:.2f}\n"
+        f"{pe('thumbs_up')} <b>Referrals:</b> {user['referral_count']}\n"
+        f"{pe('arrow')} <b>Referred by:</b> {user['referred_by'] or 'None'}\n"
+        f"{pe('link')} <b>UPI:</b> {user['upi_id'] or 'Not set'}\n\n"
+        f"{pe('task')} <b>Tasks Done:</b> {task_done['cnt'] if task_done else 0}\n"
+        f"{pe('calendar')} <b>Joined:</b> {user['joined_at']}\n"
+        f"{pe('chart')} <b>Withdrawals:</b> {wd_all['cnt']} ({wd_ok['cnt']} approved)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━",
+        reply_markup=markup
+    )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("make_admin|"))
 def make_admin_cb(call):
@@ -409,39 +395,3 @@ def smsg_cb(call):
     set_state(call.from_user.id, "admin_send_msg", {"target_id": tid})
     safe_send(call.message.chat.id, f"{pe('pencil')} Type message to send to <code>{tid}</code>:")
 
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("usr_note|"))
-def usr_note_cb(call):
-    if not is_admin(call.from_user.id): return
-    tid = int(call.data.split("|")[1])
-    set_state(call.from_user.id, "admin_add_user_note", {"target_id": tid})
-    safe_answer(call)
-    safe_send(call.message.chat.id, f"{pe('pencil')} Send note for user <code>{tid}</code>:")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("usr_warn|"))
-def usr_warn_cb(call):
-    if not is_admin(call.from_user.id): return
-    tid = int(call.data.split("|")[1])
-    set_state(call.from_user.id, "admin_add_user_warning", {"target_id": tid})
-    safe_answer(call)
-    safe_send(call.message.chat.id, f"{pe('warning')} Send warning reason for user <code>{tid}</code>:")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("usr_tier|"))
-def usr_tier_cb(call):
-    if not is_admin(call.from_user.id): return
-    tid = int(call.data.split("|")[1])
-    set_state(call.from_user.id, "admin_set_user_tier", {"target_id": tid})
-    safe_answer(call)
-    safe_send(call.message.chat.id, f"{pe('tag')} Send tier for user <code>{tid}</code> in format: <code>Name Level</code>\nExample: <code>Gold 3</code>")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("usr_activity|"))
-def usr_activity_cb(call):
-    if not is_admin(call.from_user.id): return
-    tid = int(call.data.split("|")[1])
-    rows = get_user_activity(tid, 20)
-    safe_answer(call)
-    text = f"{pe('list')} <b>User Activity</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    for r in rows:
-        text += f"• <b>{h(r['activity_type'])}</b> — {h(r['details'])}\n  {r['created_at']}\n"
-    safe_send(call.message.chat.id, text if rows else f"{pe('info')} No activity found.")

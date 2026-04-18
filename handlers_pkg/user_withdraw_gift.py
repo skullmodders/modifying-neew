@@ -356,7 +356,6 @@ def daily_bonus_cb(call):
         total_earned=user["total_earned"] + bonus,
         last_daily=today,
         bonus_balance=float(user["bonus_balance"] or 0) + bonus,
-        daily_bonus_balance=float(user["daily_bonus_balance"] or 0) + bonus,
     )
     mark_user_active(user_id)
     safe_answer(call, f"🎉 +₹{bonus} Daily Bonus!")
